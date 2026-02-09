@@ -283,7 +283,9 @@ class MACDOptStrategy(bt.Strategy):
         self.mcross = bt.indicators.CrossOver(self.macd.macd, self.macd.signal)
 
         self.atr = bt.indicators.ATR(self.data0, period=self.p.atrperiod)
-        self.rsi6 = bt.indicators.RSI(self.data0, period=self.p.rsi_period)
+        self.rsi6 = bt.indicators.RSI(self.data0, period=6)
+        self.rsi12 = bt.indicators.RSI(self.data0, period=12)
+        self.rsi24 = bt.indicators.RSI(self.data0, period=24)
         self.volume_ema = bt.indicators.EMA(self.data.volume, period=10)
 
         # KDJ指标计算
@@ -401,10 +403,10 @@ class MACDOptStrategy(bt.Strategy):
             return
         if order.status in [order.Completed]:
             # 获取成交日期（会是下一个交易日）
-            print(f"订单成交日期: {self.data.datetime.date(0)}")
+            # print(f"订单成交日期: {self.data.datetime.date(0)}")
             exec_date = bt.num2date(order.executed.dt)
             dt_str = exec_date.strftime('%Y-%m-%d')
-            print(f"实际上它是基于这个时刻的价格: {dt_str}, 成交价格: {order.executed.price}")
+            # print(f"实际上它是基于这个时刻的价格: {dt_str}, 成交价格: {order.executed.price}")
             price = order.executed.price
             size = order.executed.size  # 买入为正，卖出为负
 
@@ -764,15 +766,63 @@ class MACDOptStrategy(bt.Strategy):
         buy_details['动量类-KDJ'] = kdj_buy
         buy_score += kdj_buy
 
+        # def get_rsi_buy_score(self):
+        #     ## RSI6打分（手册标准：超卖区突破50）
+        #     rsi_break50 = self.rsi6[0] > 50 and self.rsi6[-1] < 30
+        #     if rsi_break50:
+        #         return 2.0  # 从30超卖区突破50
+        #     elif 30 <= self.rsi6[0] <= 50:
+        #         return 1.0  # 震荡区30-50
+        #     else:
+        #         return 0.0  # 50以上/接近70超买
+
         def get_rsi_buy_score(self):
-            ## RSI6打分（手册标准：超卖区突破50）
-            rsi_break50 = self.rsi6[0] > 50 and self.rsi6[-1] < 30
-            if rsi_break50:
-                return 2.0  # 从30超卖区突破50
-            elif 30 <= self.rsi6[0] <= 50:
-                return 1.0  # 震荡区30-50
-            else:
-                return 0.0  # 50以上/接近70超买
+            """
+            实战版RSI买入评分（突破50即得分，不卡70上限）
+            核心规则（贴合实战趋势判断）：
+            2分：超卖区强突破 → 前1日RSI6<30 + 当日RSI6>50（无70上限）
+            1分：非超卖区突破 → 前1日30≤RSI6≤50 + 当日RSI6>50（无70上限）
+                 或 震荡蓄力 → 30≤当日RSI6≤50，连续2日波动≤1且未突破区间
+                 或 周线强势 → 周线RSI6在50-70区间（日线不适用）
+            0分：纯超买无突破 → RSI6≥70且无突破动作，或50-69但无突破/震荡动作
+            """
+            # 核心数据（self.rsi6：[0]当日，[-1]前1日，[-2]前2日）
+            current_rsi6 = self.rsi6[0]  # 当日RSI6
+            prev1_rsi6 = self.rsi6[-1]  # 前1日RSI6
+            prev2_rsi6 = self.rsi6[-2] if len(self.rsi6) >= 3 else None  # 前2日RSI6（震荡判定用）
+
+            # ===== 2分：超卖区强突破（优先级最高）=====
+            # 前1日<30（超卖）+ 当日>50（突破）→ 哪怕到80/90都算2分（强反弹）
+            if prev1_rsi6 < 30 and current_rsi6 > 50:
+                return 2.0
+
+            # ===== 1分：实战核心（突破即得分，不卡70）=====
+            # 场景1：非超卖区突破 → 前1日30-50 + 当日>50（哪怕70+）
+            non_oversold_break = (30 <= prev1_rsi6 <= 50) and (current_rsi6 > 50)
+
+            # 场景2：震荡蓄力 → 30-50区间+连续2日低波动（原规则保留）
+            oscillation_condition = False
+            if 30 <= current_rsi6 <= 50 and prev2_rsi6 is not None:
+                no_breakout = (30 <= prev1_rsi6 <= 50) and (30 <= current_rsi6 <= 50)
+                price_fluct = abs(current_rsi6 - prev1_rsi6) <= 1.0
+                oscillation_condition = no_breakout and price_fluct
+
+            # 场景3：周线特殊 → 周线50-70（原规则保留）
+            weekly_special = False
+            if hasattr(self, 'period') and self.period == 'weekly':
+                weekly_special = 50 <= current_rsi6 <= 70
+
+            # 满足1分任一场景 → 不管突破到60/70/80，都给1分
+            if non_oversold_break or oscillation_condition or weekly_special:
+                return 1.0
+
+            # ===== 0分：纯超买/无突破（风控底线）=====
+            # 仅当：1) RSI≥70且无突破动作 或 2) 50-69但无任何突破/震荡动作
+            if current_rsi6 >= 70 or (50 <= current_rsi6 <= 69):
+                return 0.0
+
+            # 兜底：未匹配任何场景 → 0分（防御性编程）
+            return 0.0
 
         rsi_buy = get_rsi_buy_score(self)
         buy_details['动量类-RSI6'] = rsi_buy
@@ -1015,15 +1065,14 @@ class MACDOptStrategy(bt.Strategy):
             'sell_details': sell_details
         }
 
-        current_date = self.data.datetime.date(0)
         if self.order:
             return
 
         if not self.position:  # 无仓位，判断买入（基于手册分数区间）
             # 手册分数区间：5-6.9分2成试仓，7+分逐步加仓，这里取≥5分作为买入阈值
-            # buy_condition = buy_score >= 5.0
-            buy_condition = kdj_gold_cross #and self.rsi6[0] > 50 and self.rsi6[0] < 70
-            print(f"buy_condition {current_date}金叉{buy_condition}")
+            # buy_condition = buy_score >= 4
+            # buy_condition = kdj_gold_cross
+            buy_condition = self.rsi6[0] > self.rsi12[0] and  self.rsi6[-1] < self.rsi12[-1] and (self.rsi12[0] > self.rsi24[0] and  self.rsi12[-1] < self.rsi24[-1]) and self.rsi6[0] > 50 or kdj_gold_cross
             if buy_condition:
                 # ========== 核心新增：买入时获取并记录所有指标值 ==========
                 # print(f"current_date buy {current_date}")
@@ -1037,8 +1086,8 @@ class MACDOptStrategy(bt.Strategy):
             pclose = self.data0.close[0]
             pstop = self.pstop
             # 手册分数区间：5+分逐步减仓，≥7分清仓，这里取≥5分作为卖出阈值
-            # sell_condition = sell_score >= 6.0
-            sell_condition = kdj_dead_cross #and self.j[-1] > 80 and self.j[0] < 80
+            # sell_condition = sell_score >= 5.5
+            sell_condition = self.rsi12[0] < self.rsi24[0] and self.rsi12[-1] > self.rsi24[-1]
             if sell_condition:
                 # ========== 核心新增：卖出时获取并记录所有指标值 ==========
                 sell_indicators = self.get_current_indicators()
@@ -1050,21 +1099,6 @@ class MACDOptStrategy(bt.Strategy):
                 self.pstop = max(pstop, pclose - pdist)
 
     def stop(self):
-        # 修复：仅处理未平仓的交易，避免重复平仓
-        for trade in self.trades:
-            if trade.isopen and self.position.size > 0:
-                # 补充：记录最后一天的指标作为卖出指标
-                self.order_indicator_info['sell'] = self.get_current_indicators()
-                # 手动平仓
-                trade.close(
-                    price=self.data.close[0] if len(self.data.close) > 0 else 0,
-                    dt=self.data.datetime.datetime(0),
-                    commission=self.broker.getcommissioninfo(self.data).getcommission(
-                        size=trade.size, price=self.data.close[0]
-                    )
-                )
-                self.notify_trade(trade)
-
         # ========== 原有逻辑：保存回测结果 + 交易日志 完全未动 ==========
         init_value = self.init_cash
         final_value = self.broker.getvalue()
@@ -1073,12 +1107,16 @@ class MACDOptStrategy(bt.Strategy):
         profit_loss_ratio = 0.0
         avg_win = 0.0
         avg_lose = 0.0
-
         if self.total_trades > 0:
             win_rate = (self.win_trades / self.total_trades) * 100
             avg_win = self.total_win_pnl / self.win_trades if self.win_trades else 0.0
             avg_lose = self.total_lose_pnl / self.lose_trades if self.lose_trades else 0.0
             profit_loss_ratio = avg_win / avg_lose if avg_lose > 0 else 0.0
+
+        # ========== 【修复】移除所有对分析器结果的引用 ==========
+        # 不再尝试计算或打印 total_strategy_return, annual_return 等
+        # 这些工作已由 print_performance_report 函数完成
+        # =======================================================
 
         print(
             "MACD({0},{1},{2}) | KDJ({3},{4},{5}) | 胜率:{6:>5.2f}% | 盈亏比:{7:>4.2f} | 总交易:{8:>3d} | 总盈亏:{9:>8.2f} | 期末资金:{10:>10.2f}".format(
@@ -1086,12 +1124,12 @@ class MACDOptStrategy(bt.Strategy):
                 self.p.kdj_period, self.p.kdj_k_period, self.p.kdj_d_period,
                 win_rate, profit_loss_ratio, self.total_trades, total_pnl, final_value))
 
+        # ========== 原有逻辑：保存结果到文件 ==========
         with open(RESULT_FILE, 'a', encoding='utf-8', newline='') as f:
             f.write("{0},{1},{2},{3},{4},{5},{6:.2f},{7:.2f},{8},{9},{10},{11:.2f},{12:.2f},{13:.2f},{14:.2f}\n".format(
                 self.p.macd1, self.p.macd2, self.p.macdsig,
                 self.p.kdj_period, self.p.kdj_k_period, self.p.kdj_d_period,
-                win_rate, profit_loss_ratio,
-                self.win_trades, self.lose_trades, self.total_trades,
+                win_rate, profit_loss_ratio, self.win_trades, self.lose_trades, self.total_trades,
                 avg_win, avg_lose, total_pnl, final_value))
 
         # 保存交易日志到CSV（包含指标值）
@@ -1101,9 +1139,7 @@ class MACDOptStrategy(bt.Strategy):
             df_trade_log.to_csv(TRADE_LOG_FILE, index=False, encoding='utf-8-sig')
             print(f"\n✅ 每笔交易盈亏日志（含指标）已保存到: {TRADE_LOG_FILE}")
         else:
-            print("\n⚠️  本次回测无交易记录")
-
-        # 验证MACD一致性
+            print("\n⚠️ 本次回测无交易记录")
 
 
 
@@ -1148,6 +1184,125 @@ def print_target_date_score(strat, target_date):
     for item, score in sell_details.items():
         print(f"  - {item.ljust(15)}：{score:.2f} 分")
     print("=" * 80)
+
+
+def add_performance_analyzers(cerebro, data0):
+    """
+    为 Cerebro 引擎添加一套全面的策略绩效分析器。
+
+    Args:
+        cerebro (bt.Cerebro): Backtrader 的 Cerebro 引擎实例。
+        data0 (bt.DataBase): 用作市场基准的数据源。
+    """
+    # 定义要添加的分析器列表：(分析器类, 别名, 额外参数字典)
+    analyzers_config = [
+        (bt.analyzers.SharpeRatio, 'sharpe', {'riskfreerate': 0.01, 'annualize': True}),
+        (bt.analyzers.AnnualReturn, 'annual_return', {}),
+        (bt.analyzers.DrawDown, 'drawdown', {}),
+        (bt.analyzers.TradeAnalyzer, 'trade_analyzer', {}),
+        (bt.analyzers.SQN, 'sqn', {}),
+        (bt.analyzers.Calmar, 'calmar', {}),
+        (bt.analyzers.TimeReturn, 'timereturn', {}),
+        # 使用主数据作为基准
+        (bt.analyzers.TimeReturn, 'benchmark', {'data': data0}),
+    ]
+
+    for analyzer_class, name, kwargs in analyzers_config:
+        cerebro.addanalyzer(analyzer_class, _name=name, **kwargs)
+
+
+def print_performance_report(strat):
+    """
+    从回测完成的策略实例中提取分析器结果，并打印详细的绩效报告。
+
+    Args:
+        strat (bt.Strategy): 回测完成后的策略实例。
+    """
+    import pandas as pd
+
+    print("\n" + "=" * 60)
+    print("📊 策略绩效分析报告")
+    print("=" * 60)
+
+    # --- 提取所有分析结果 ---
+    # 夏普比率
+    sharpe_analysis = strat.analyzers.sharpe.get_analysis()
+    final_sharpe = sharpe_analysis.get('sharperatio', None)
+
+    # 年度收益率 (策略 & 基准)
+    strategy_annual_ret = strat.analyzers.annual_return.get_analysis()
+    benchmark_timeret = strat.analyzers.benchmark.get_analysis()
+    benchmark_annual_ret = {}
+    if benchmark_timeret:
+        bench_series = pd.Series(benchmark_timeret)
+        bench_series.index = pd.to_datetime(bench_series.index)
+        benchmark_annual_ret = bench_series.groupby(bench_series.index.year).apply(lambda x: (x + 1).prod() - 1)
+
+    # 最大回撤
+    dd_analysis = strat.analyzers.drawdown.get_analysis()
+    max_dd = dd_analysis.max.drawdown
+    max_dd_duration = dd_analysis.max.len
+
+    # 交易统计
+    trade_analysis = strat.analyzers.trade_analyzer.get_analysis()
+    if trade_analysis.total.total > 0:
+        total_trades = trade_analysis.total.total
+        won_trades = trade_analysis.won.total
+        win_rate = won_trades / total_trades * 100
+        pnl_net = trade_analysis.pnl.net.total
+    else:
+        total_trades = won_trades = win_rate = pnl_net = 0
+
+    # SQN
+    sqn_analysis = strat.analyzers.sqn.get_analysis()
+    sqn_value = sqn_analysis.get('sqn', None)
+
+    # 卡玛比率
+    calmar_analysis = strat.analyzers.calmar.get_analysis()
+    calmar_ratio = calmar_analysis.get('calmar', None)
+
+    # 总收益率 & 年化收益率
+    timeret_analysis = strat.analyzers.timereturn.get_analysis()
+    if timeret_analysis:
+        returns_series = pd.Series(timeret_analysis)
+        total_strategy_return = (returns_series + 1).prod() - 1
+        start_date = min(returns_series.index)
+        end_date = max(returns_series.index)
+        years = (end_date - start_date).days / 365.25
+        annual_return = ((total_strategy_return + 1) ** (1 / years) - 1) * 100 if years > 0 else 0.0
+    else:
+        total_strategy_return = annual_return = 0.0
+
+    benchmark_total_return = 0.0
+    if benchmark_timeret:
+        bench_series = pd.Series(benchmark_timeret)
+        benchmark_total_return = (bench_series + 1).prod() - 1
+
+    # --- 打印结果 ---
+    print(f"📈 策略总收益率: {total_strategy_return * 100:.2f}%")
+    print(f"📈 基准总收益率: {benchmark_total_return * 100:.2f}%")
+    print(f"📅 年化收益率: {annual_return:.2f}%")
+    print(f"⚖️  夏普比率: {final_sharpe:.2f}" if final_sharpe is not None else "⚖️  夏普比率: N/A")
+    print(f"📉 最大回撤: {max_dd:.2f}%")
+    print(f"⏳ 最长回撤期: {max_dd_duration} 天")
+    print(f"🎯 系统质量数 (SQN): {sqn_value:.2f}" if sqn_value is not None else "🎯 SQN: N/A")
+    print(f"📈 卡玛比率: {calmar_ratio:.2f}" if calmar_ratio is not None else "📈 卡玛比率: N/A")
+
+    # --- 【核心新增】年度收益对比表 ---
+    print("-" * 60)
+    print("📅 年度收益率对比:")
+    print("-" * 60)
+    all_years = sorted(set(strategy_annual_ret.keys()) | set(benchmark_annual_ret.keys()))
+    for year in all_years:
+        strat_ret = strategy_annual_ret.get(year, 0.0)
+        bench_ret = benchmark_annual_ret.get(year, 0.0)
+        print(f" {year}: 策略 {strat_ret:7.2%} | 基准 {bench_ret:7.2%}")
+
+    print("-" * 60)
+    print(f"✅ 总交易次数: {total_trades}")
+    print(f"✅ 胜率: {win_rate:.2f}%")
+    print(f"💰 净盈亏: {pnl_net:.2f}")
+    print("=" * 60)
 
 
 # ===================== 主逻辑入口 =====================
@@ -1215,13 +1370,22 @@ def runstrat(args=None):
     cerebro.addsizer(FixedPerc, perc=args.cashalloc)
     cerebro.broker.setcommission(commission=args.commperc)
     # cerebro.broker.set_slippage_perc(0.00005)       # 滑点
-
+    # ========== 【添加全面的策略绩效分析器】==========
+    add_performance_analyzers(cerebro, data0)
+    # ===================================================
     # 运行回测
     print('初始资金: %.2f' % cerebro.broker.getvalue())
-    strat_list = cerebro.run()
-    strat = strat_list[0]
+    results = cerebro.run()
+    strat = results[0]
+    # ========== 【关键调用点 2】打印分析器报告 ==========
+    print_performance_report(strat)
+    # ============================================
     print(f"✅ 本次回测生成 买入信号: {len(strat.buy_signals)} 个 | 卖出信号: {len(strat.sell_signals)} 个")
     print(f'期末资金: {cerebro.broker.getvalue():.2f}')
+
+
+    if args.target_date:
+        print_target_date_score(strat, args.target_date)
 
     # ===================== 新增：判断是否指定目标日期，是则打印分数，否则执行原有绘图 =====================
     # --- 核心：直接从 args.data 指定的文件路径读取 ---
@@ -1254,12 +1418,12 @@ def runstrat(args=None):
         signals=all_signals,
     )
     # ==================== 【新增：调试信息】 ====================
-    print("\n🔍 调试信息:")
-    print(f"df_plot 的 date_str 列前5行:\n{df_plot['date_str'].head()}")
-    print(f"\n买入信号日期: {[sig[0] for sig in strat.buy_signals]}")
-    print(f"卖出信号日期: {[sig[0] for sig in strat.sell_signals]}")
+    # print("\n🔍 调试信息:")
+    # print(f"df_plot 的 date_str 列前5行:\n{df_plot['date_str'].head()}")
+    # print(f"\n买入信号日期: {[sig[0] for sig in strat.buy_signals]}")
+    # print(f"卖出信号日期: {[sig[0] for sig in strat.sell_signals]}")
 
-    print("✅ 图表已成功生成！")
+    # print("✅ 图表已成功生成！")
     #######################################
 
     # 分析结果

@@ -180,14 +180,14 @@ def plot_bollinger_bands(df, ax):
     df['boll_lo'] = mean - num_std * stddev
 
     # 绘制上下轨（灰色）
-    p0 = df['boll_hi'].plot(ax=ax, color='#808080', legend='BB Upper')
-    p1 = df['boll_lo'].plot(ax=ax, color='#808080', legend='BB Lower')
+    p0 = df['boll_hi'].plot(ax=ax, color='red', legend='BB Upper')
+    p1 = df['boll_lo'].plot(ax=ax, color='green', legend='BB Lower')
 
     # 填充通道区域（浅灰色）
     fplt.fill_between(p0, p1, color='#bbb')
 
     # 可选：绘制中轨（同花顺通常不单独标出中轨，但有时会显示）
-    mean.plot(ax=ax, color='#808080', style='--', width=1.0)
+    mean.plot(ax=ax, color='blue', style='--', width=1.0)
 
 
 def plot_ema(df, ax):
@@ -208,10 +208,10 @@ def plot_ma(df, ax):
 
     # 绘制均线并添加到独立MA图例
     curve5 = fplt.plot(ma5, ax=ax, color='black')
-    curve10 = fplt.plot(ma10, ax=ax, color='#FFA500')
-    curve20 = fplt.plot(ma20, ax=ax, color='#0000FF')
-    curve60 = fplt.plot(ma60, ax=ax, color='#9933FF')  # 紫色
-    curve200 = fplt.plot(ma200, ax=ax, color='#009999')  # 青色
+    curve10 = fplt.plot(ma10, ax=ax, color='orange')
+    curve20 = fplt.plot(ma20, ax=ax, color='red')
+    curve60 = fplt.plot(ma60, ax=ax, color='green')  # 紫色
+    curve200 = fplt.plot(ma200, ax=ax, color='blue')  # 青色
 
     # 添加到独立MA图例
     add_legend_item(ax, "ma_legend", curve5, 'MA5')
@@ -434,14 +434,14 @@ def draw_trade_signals(df_plot, ax, buy_signals=None, sell_signals=None):
             # ========== 【关键修改】先绘制，再设置Z值 ==========
             plot_item = fplt.plot(buy_x, buy_y, ax=ax, color='#FFD700',
                                   style='v', width=2.5, legend='买入')
-            # 添加调试信息
-            print(f"买入信号 PlotItem 类型: {type(plot_item)}")
-            # 强制设置 Z值为 0，确保低于所有其他元素
-            try:
-                plot_item.setZValue(0)  # 尝试设为 0
-                print("✅ 买入信号 Z值已设置为 0")
-            except Exception as e:
-                print(f"❌ 设置买入信号 Z值失败: {e}")
+            # # 添加调试信息
+            # print(f"买入信号 PlotItem 类型: {type(plot_item)}")
+            # # 强制设置 Z值为 0，确保低于所有其他元素
+            # try:
+            #     plot_item.setZValue(0)  # 尝试设为 0
+            #     print("✅ 买入信号 Z值已设置为 0")
+            # except Exception as e:
+            #     print(f"❌ 设置买入信号 Z值失败: {e}")
             # ====================================================
 
     # 卖出信号（↑ 三角形，放在最高价上方）
@@ -624,7 +624,6 @@ def plot_a_stock_analysis(
     # some more charts
     plot_accumulation_distribution(df, ax7)
     plot_on_balance_volume(df, ax6)
-
 
     # ========== 【关键新增】在所有内容绘制完成后，添加交易信号 ==========
     if signals is not None:
