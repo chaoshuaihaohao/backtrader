@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-#btfinplot.py
+# btfinplot.py
 
 from collections import defaultdict
 import dateutil.parser
@@ -132,25 +132,20 @@ def local2timestamp(s):
 
 def download_price_history(symbol='XBTUSD', start_time='2023-01-01', end_time='2023-10-29', interval_mins=60):
     csv_file_path = r'D:\outsidework\github\stockdata\A_data\002738_qfq_A_data.csv'
-    # 检查文件是否存在
     if not os.path.exists(csv_file_path):
         raise FileNotFoundError(f"本地CSV文件不存在：{csv_file_path}，请检查路径是否正确！")
-    # 读取CSV文件（跳过股票代码列，直接使用所需列）
-    df = pd.read_csv(csv_file_path, usecols=['date', 'open', 'close', 'high', 'low', 'volume'])
 
-    # 数据格式适配（完全匹配你的CSV结构）
-    # 1. 日期列转换为时间戳（time列）
+    # ✅ 关键修改：加入 'turnover' 到 usecols（前提是 CSV 里真有这列！）
+    required_cols = ['date', 'open', 'close', 'high', 'low', 'volume', 'turnover']
+    df = pd.read_csv(csv_file_path, usecols=required_cols)
+
     df['time'] = df['date'].apply(lambda x: local2timestamp(x))
-
     start_time = local2timestamp(start_time)
     end_time = local2timestamp(end_time)
     df = df[(df['time'] >= start_time) & (df['time'] <= end_time)]
+    df = df.dropna(subset=required_cols)  # 包含 turnover
 
-    # 3. 移除空值，确保数据完整性
-    df = df.dropna(subset=['time', 'open', 'close', 'high', 'low', 'volume'])
-
-    # 4. 设置time为索引，返回和原函数一致的格式
-    return df.set_index('time')[['open', 'close', 'high', 'low', 'volume']]
+    return df.set_index('time')[['open', 'close', 'high', 'low', 'volume', 'turnover']]
 
 
 def plot_accumulation_distribution(df, ax):
@@ -264,7 +259,7 @@ def plot_rsi(df, ax):
     """计算并绘制三个不同周期的RSI指标（RSI6/12/24）"""
     periods = [6, 12, 24]
     colors = ['black', 'orange', 'red']
-
+    curve = {}
     for i, period in enumerate(periods):
         # ===== 为每个周期独立初始化数据（避免跨周期污染）=====
         diff = df['close'].diff().values
@@ -307,15 +302,21 @@ def plot_rsi(df, ax):
         col_name = f'rsi_{period}'
         df[col_name] = rsi
 
-        df[col_name].plot(ax=ax, legend=f'RSI({period})', color=colors[i])
+        # df[col_name].plot(ax=ax, legend=f'RSI({period})', color=colors[i])
+        curve[col_name] = df[col_name].plot(ax=ax, color=colors[i], legend=col_name)
+
+        # 添加到独立MA图例
+        add_legend_item(ax, "rsi_legend", curve[col_name], f'RSI({period})')
 
     # 设置坐标轴范围
     fplt.set_y_range(0, 100, ax=ax)
 
     # 超买超卖区域
     fplt.add_horizontal_band(30, 70, ax=ax)
-    fplt.plot([50] * len(df), ax=ax, color='gray', style='--', width=1.0,
-              legend='强弱线(50)')
+    # curve = fplt.plot([50] * len(df), ax=ax, color='gray', style='--', width=1.0, legend='强弱线(50)')
+    fplt.plot([50] * len(df), ax=ax, color='gray', style='--', width=1.0)
+    # 添加到独立MA图例
+    # add_legend_item(ax, "rsi_legend", curve, '强弱线(50)')
 
 
 def plot_macd(df, ax):
@@ -324,7 +325,7 @@ def plot_macd(df, ax):
     signal = macd.ewm(span=9).mean()
     df['macd_diff'] = macd - signal
     fplt.volume_ocv(df[['open', 'close', 'macd_diff']], ax=ax, colorfunc=fplt.strength_colorfilter)
-    fplt.plot(macd, ax=ax, legend='MACD', color='black')
+    fplt.plot(macd, ax=ax, legend='DIFF', color='black')
     fplt.plot(signal, ax=ax, legend='Signal', color='red')
 
 
@@ -388,17 +389,21 @@ def plot_kdj(df, ax):
         df['kdj_j'] = df['kdj_j'].bfill().fillna(50.0)
         return df
 
-    # 1. 调用您提供的计算函数（默认参数 period=9, k/d_period=3）
+    # 1. 调用计算函数（默认参数 period=9, k/d_period=3）
     df_with_kdj = calculate_kdj_bt(df, period=9, k_period=3, d_period=3)
 
+    # 关键：将KDJ列添加到原始df中，供悬停回调使用
+    df['kdj_k'] = df_with_kdj['kdj_k']
+    df['kdj_d'] = df_with_kdj['kdj_d']
+    df['kdj_j'] = df_with_kdj['kdj_j']
+
     # 2. 绘制 K/D/J 线（使用鲜明且专业的颜色）
-    df_with_kdj['kdj_k'].plot(ax=ax, legend='K', color='black')
-    df_with_kdj['kdj_d'].plot(ax=ax, legend='D', color='orange')
-    df_with_kdj['kdj_j'].plot(ax=ax, legend='J', color='red')
+    df['kdj_k'].plot(ax=ax, legend='K', color='black')
+    df['kdj_d'].plot(ax=ax, legend='D', color='orange')
+    df['kdj_j'].plot(ax=ax, legend='J', color='red')
 
     # 5. 可选：添加超买/超卖区域（半透明）
     fplt.add_horizontal_band(20, 80, ax=ax)
-
 
 def draw_trade_signals(df_plot, ax, buy_signals=None, sell_signals=None):
     """绘制买卖信号 - 兼容周/月线，动态偏移"""
@@ -434,14 +439,6 @@ def draw_trade_signals(df_plot, ax, buy_signals=None, sell_signals=None):
             # ========== 【关键修改】先绘制，再设置Z值 ==========
             plot_item = fplt.plot(buy_x, buy_y, ax=ax, color='#FFD700',
                                   style='v', width=2.5, legend='买入')
-            # # 添加调试信息
-            # print(f"买入信号 PlotItem 类型: {type(plot_item)}")
-            # # 强制设置 Z值为 0，确保低于所有其他元素
-            # try:
-            #     plot_item.setZValue(0)  # 尝试设为 0
-            #     print("✅ 买入信号 Z值已设置为 0")
-            # except Exception as e:
-            #     print(f"❌ 设置买入信号 Z值失败: {e}")
             # ====================================================
 
     # 卖出信号（↑ 三角形，放在最高价上方）
@@ -458,14 +455,6 @@ def draw_trade_signals(df_plot, ax, buy_signals=None, sell_signals=None):
             # ========== 【关键修改】先绘制，再设置Z值 ==========
             plot_item = fplt.plot(sell_x, sell_y, ax=ax, color='#1E90FF',
                                   style='^', width=2.5, legend='卖出')
-            # 添加调试信息
-            # print(f"卖出信号 PlotItem 类型: {type(plot_item)}")
-            # 强制设置 Z值为 0，确保低于所有其他元素
-            # try:
-            #     plot_item.setZValue(0)  # 尝试设为 0
-            #     print("✅ 卖出信号 Z值已设置为 0")
-            # except Exception as e:
-            #     print(f"❌ 设置卖出信号 Z值失败: {e}")
             # ====================================================
 
 
@@ -506,28 +495,78 @@ def append_trade_signals(df_plot, ax, signals):
 
 
 # ========== 公共回调函数（可被外部复用或覆盖） ==========
-def default_hover_callback(x, y, df, symbol, interval, hover_label, ax):
+def default_hover_callback(x, y, df, symbol, interval, hover_label, rsi_hover_label, kdj_hover_label, ax, ax3, ax4):
     """
-    默认的鼠标悬停提示回调函数。
+    默认的鼠标悬停提示回调函数（新增RSI+KDJ数值显示）。
     可被外部替换以自定义显示内容。
     """
     ts_sec = int(x // 1_000_000_000)
+
+    # 1. 更新主图K线信息
     if ts_sec not in df.index:
         if hover_label is not None:
             hover_label.setText('')  # 空文本
+        if rsi_hover_label is not None:
+            rsi_hover_label.setText('')
+        if kdj_hover_label is not None:
+            kdj_hover_label.setText('')
         return
+
     row = df.loc[ts_sec]
     color = 'red' if row.open < row.close else 'green'
-    rawtxt = (f'<span style="font-size:13px">{symbol} {interval.upper()}</span> '
-              f'开<span style="color:{color}">{row.open:.2f}</span> '
-              f'收<span style="color:{color}">{row.close:.2f}</span> '
-              f'高<span style="color:{color}">{row.high:.2f}</span> '
-              f'低<span style="color:{color}">{row.low:.2f}</span>')
+    # 主图开收高低信息
+    kline_txt = (f'<span style="font-size:13px">{symbol} {interval.upper()}</span> '
+                 f'开<span style="color:{color}">{row.open:.2f}</span> '
+                 f'收<span style="color:{color}">{row.close:.2f}</span> '
+                 f'高<span style="color:{color}">{row.high:.2f}</span> '
+                 f'低<span style="color:{color}">{row.low:.2f}</span> '
+                 f'换<span style="color:{color}">{row.turnover:.2f}%</span>')
+
     if hover_label is not None:
         ax_rect = ax.boundingRect()
         hover_label.setPos(ax_rect.width() - 350, 20)
-        hover_label.setText(rawtxt)
+        hover_label.setText(kline_txt)
 
+    # 2. 更新RSI数值信息
+    rsi_parts = []
+    for period in [6, 12, 24]:
+        col_name = f'rsi_{period}'
+        if col_name in df.columns and pd.notna(row[col_name]):
+            rsi_val = row[col_name]
+            # 根据RSI值设置颜色（超买红，超卖绿，正常黑）
+            if rsi_val > 70:
+                rsi_color = 'red'
+            elif rsi_val < 30:
+                rsi_color = 'green'
+            else:
+                rsi_color = 'black'
+            rsi_parts.append(f'RSI{period}: <span style="color:{rsi_color}">{rsi_val:.1f}</span>')
+
+    rsi_txt = ' | '.join(rsi_parts) if rsi_parts else ''
+    if rsi_hover_label is not None:
+        ax3_rect = ax3.boundingRect()
+        rsi_hover_label.setPos(ax3_rect.width() - 200, 20)
+        rsi_hover_label.setText(rsi_txt)
+
+    # 3. 新增：更新KDJ数值信息
+    kdj_parts = []
+    for col in ['kdj_k', 'kdj_d', 'kdj_j']:
+        if col in df.columns and pd.notna(row[col]):
+            kdj_val = row[col]
+            # 根据KDJ值设置颜色（超买>80红，超卖<20绿，正常黑）
+            if kdj_val > 80:
+                kdj_color = 'red'
+            elif kdj_val < 20:
+                kdj_color = 'green'
+            else:
+                kdj_color = 'black'
+            kdj_parts.append(f'{col.upper()}: <span style="color:{kdj_color}">{kdj_val:.1f}</span>')
+
+    kdj_txt = ' | '.join(kdj_parts) if kdj_parts else ''
+    if kdj_hover_label is not None:
+        ax4_rect = ax4.boundingRect()
+        kdj_hover_label.setPos(ax4_rect.width() - 200, 20)
+        kdj_hover_label.setText(kdj_txt)
 
 def default_crosshair_callback(x, y, xtext, ytext, df):
     """
@@ -540,18 +579,55 @@ def default_crosshair_callback(x, y, xtext, ytext, df):
         ytext = '%s (close%+.2f)' % (ytext, (y - close_price))
     return xtext, ytext
 
+def create_ctrl_panel(win):
+    panel = QWidget(win)
+    panel.move(100, 0)
+    win.scene().addWidget(panel)
+    layout = QGridLayout(panel)
+
+    panel.symbol = QComboBox(panel)
+    [panel.symbol.addItem(i+'USDT') for i in 'BTC ETH XRP DOGE BNB SOL ADA LTC LINK DOT TRX BCH'.split()]
+    panel.symbol.setCurrentIndex(1)
+    layout.addWidget(panel.symbol, 0, 0)
+    panel.symbol.currentTextChanged.connect(change_asset)
+
+    layout.setColumnMinimumWidth(1, 30)
+
+    panel.interval = QComboBox(panel)
+    [panel.interval.addItem(i) for i in '1d 4h 1h 30m 15m 5m 1m 1s'.split()]
+    panel.interval.setCurrentIndex(6)
+    layout.addWidget(panel.interval, 0, 2)
+    panel.interval.currentTextChanged.connect(change_asset)
+
+    layout.setColumnMinimumWidth(3, 30)
+
+    panel.indicators = QComboBox(panel)
+    [panel.indicators.addItem(i) for i in 'Clean:Few indicators:Moar indicators'.split(':')]
+    panel.indicators.setCurrentIndex(1)
+    layout.addWidget(panel.indicators, 0, 4)
+    panel.indicators.currentTextChanged.connect(change_asset)
+
+    layout.setColumnMinimumWidth(5, 30)
+
+    panel.darkmode = QCheckBox(panel)
+    panel.darkmode.setText('Haxxor mode')
+    panel.darkmode.setCheckState(pg.Qt.QtCore.Qt.CheckState.Checked)
+    panel.darkmode.toggled.connect(dark_mode_toggle)
+    layout.addWidget(panel.darkmode, 0, 6)
+
+    return panel
 
 # ========== 核心公共API ==========
 def plot_a_stock_analysis(
-    df,
-    symbol='A股',
-    title_suffix='',
-    signals=None,
-    hover_callback=None,      # 新增参数
-    crosshair_callback=None   # 新增参数
+        df,
+        symbol='A股',
+        title_suffix='',
+        signals=None,
+        hover_callback=None,  # 新增参数
+        crosshair_callback=None  # 新增参数
 ):
     """
-    绘制完整的A股多指标分析图。
+    绘制完整的A股多指标分析图（新增RSI+KDJ动态数值显示）。
 
     参数:
         df (pd.DataFrame): 必须包含列 ['open', 'high', 'low', 'close', 'volume']，且索引为时间戳（秒）。
@@ -561,7 +637,7 @@ def plot_a_stock_analysis(
         signals (list): 交易信号列表，例如：
                         - [{'date': '2023-05-10', 'type': 'buy'}, {'date': '2023-06-15', 'type': 'sell'}]
                         - 或 [('2023-05-10', 'buy'), ('2023-06-15', 'sell')]
-        hover_callback (callable): 自定义悬停回调，签名为 func(x, y, df, symbol, interval, hover_label, ax)
+        hover_callback (callable): 自定义悬停回调，签名为 func(x, y, df, symbol, interval, hover_label, rsi_hover_label, kdj_hover_label, ax, ax3, ax4)
         crosshair_callback (callable): 自定义十字线回调，签名为 func(x, y, xtext, ytext, df)
     """
     interval = 'd'  # 日线（必须定义！）
@@ -592,10 +668,20 @@ def plot_a_stock_analysis(
     )
 
     # ========== 主函数中：用finplot原生add_legend创建hover提示（替代pg.LabelItem） ==========
+    # 主图K线悬停标签
     hover_label = fplt.add_legend('', ax=ax)
-    # 初始位置兜底（避免ax.width()为0导致位置错误）
     hover_label.setPos(800, 20)  # 先设一个固定值，hover时再校准
     hover_label.setZValue(1000)  # 提升层级，确保在最上层
+
+    # RSI子图悬停标签（原有）
+    rsi_hover_label = fplt.add_legend('', ax=ax3)
+    rsi_hover_label.setPos(ax3.boundingRect().width() - 200, 20)
+    rsi_hover_label.setZValue(1000)
+
+    # 新增：KDJ子图悬停标签
+    kdj_hover_label = fplt.add_legend('', ax=ax4)
+    kdj_hover_label.setPos(ax4.boundingRect().width() - 200, 20)
+    kdj_hover_label.setZValue(1000)
 
     ####### 图层顺序 #######
     # 1.  K线图 (主图)
@@ -619,7 +705,7 @@ def plot_a_stock_analysis(
 
     plot_macd(df, ax2)
     plot_rsi(df, ax3)
-    plot_kdj(df, ax4)
+    plot_kdj(df, ax4)  # KDJ计算后会自动给df添加kdj_k/kdj_d/kdj_j列
 
     # some more charts
     plot_accumulation_distribution(df, ax7)
@@ -636,7 +722,7 @@ def plot_a_stock_analysis(
 
     # 包装成 finplot 能接受的形式（闭包捕获当前上下文）
     def wrapped_hover(x, y):
-        return final_hover_cb(x, y, df, symbol, interval, hover_label, ax)
+        return final_hover_cb(x, y, df, symbol, interval, hover_label, rsi_hover_label, kdj_hover_label, ax, ax3, ax4)
 
     def wrapped_crosshair(x, y, xtext, ytext):
         return final_crosshair_cb(x, y, xtext, ytext, df)
@@ -648,7 +734,6 @@ def plot_a_stock_analysis(
     fplt.autoviewrestore()
 
     fplt.show()
-
 
 # 如果直接运行此文件，则执行示例（保留原有逻辑）
 if __name__ == '__main__':
