@@ -1072,7 +1072,8 @@ class MACDOptStrategy(bt.Strategy):
             # 手册分数区间：5-6.9分2成试仓，7+分逐步加仓，这里取≥5分作为买入阈值
             # buy_condition = buy_score >= 4
             # buy_condition = kdj_gold_cross
-            buy_condition = self.rsi6[0] > self.rsi12[0] and  self.rsi6[-1] < self.rsi12[-1] and (self.rsi12[0] > self.rsi24[0] and  self.rsi12[-1] < self.rsi24[-1]) and self.rsi6[0] > 50 or kdj_gold_cross
+            # buy_condition1 = self.rsi6[0] > self.rsi12[0] and  self.rsi6[-1] < self.rsi12[-1] and (self.rsi12[0] > self.rsi24[0] and  self.rsi12[-1] < self.rsi24[-1]) and self.rsi6[0] > 50 or kdj_gold_cross
+            buy_condition = self.rsi6[-1] < self.rsi6[0] and self.rsi6[0] > 50 and kdj_gold_cross
             if buy_condition:
                 # ========== 核心新增：买入时获取并记录所有指标值 ==========
                 # print(f"current_date buy {current_date}")
@@ -1087,7 +1088,8 @@ class MACDOptStrategy(bt.Strategy):
             pstop = self.pstop
             # 手册分数区间：5+分逐步减仓，≥7分清仓，这里取≥5分作为卖出阈值
             # sell_condition = sell_score >= 5.5
-            sell_condition = self.rsi12[0] < self.rsi24[0] and self.rsi12[-1] > self.rsi24[-1]
+            # sell_condition = self.rsi12[0] < self.rsi24[0] and self.rsi12[-1] > self.rsi24[-1]
+            sell_condition = self.rsi6[0] < self.rsi12[0]
             if sell_condition:
                 # ========== 核心新增：卖出时获取并记录所有指标值 ==========
                 sell_indicators = self.get_current_indicators()
@@ -1393,7 +1395,7 @@ def runstrat(args=None):
     print(f"📊 正在从文件读取数据用于绘图: {csv_file_path}")
 
     # 读取CSV，假设你的CSV包含 'date', 'open', 'high', 'low', 'close', 'volume' 列
-    df_plot = pd.read_csv(csv_file_path, usecols=['date', 'open', 'high', 'low', 'close', 'volume'])
+    df_plot = pd.read_csv(csv_file_path, usecols=['date', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
 
     # === 关键修正：确保 date 列是 datetime 类型，然后创建 date_str 和 time 索引 ===
     df_plot['date'] = pd.to_datetime(df_plot['date'])  # 先转为 datetime
