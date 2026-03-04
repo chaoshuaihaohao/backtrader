@@ -1,11 +1,13 @@
 #!/usr/bin/env python
+# ====== my_test.py ======
 # -*- coding: utf-8; py-indent-offset:4 -*-
 ###############################################################################
 
 from __future__ import (absolute_import, division, print_function, unicode_literals)
-# ====== 在 my_test.py 文件的最开头添加 ======
+
 import sys
 import os
+
 # 将包含 backtrader/ 文件夹的目录加入 Python 路径
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if project_root not in sys.path:
@@ -136,53 +138,6 @@ class GenericCSVWithTurnover(btfeeds.GenericCSVData):
     )
 
 
-def get_ma_trend_global(ma_indicator, compare_n, threshold):
-    if len(ma_indicator) < compare_n + 1:
-        return 0.0, "持平"
-
-    ma_now = ma_indicator[0]
-    ma_prev = ma_indicator[-compare_n]
-    ma_slope = (ma_now - ma_prev) / compare_n
-    if ma_slope > threshold:
-        ma_trend = "强向上"
-    elif ma_slope > -threshold / 2:
-        ma_trend = "弱向上"
-    elif ma_slope < -threshold:
-        ma_trend = "强向下"
-    else:
-        ma_trend = "弱向下"
-    return ma_slope, ma_trend
-
-
-def is_ma_golden_cross(ma_short, ma_long, n=2):
-    if len(ma_short) < n + 2 or len(ma_long) < n + 2:
-        return False
-    cross_cond = ma_short[-1] < ma_long[-1] and ma_short[0] > ma_long[0]
-    hold_cond = True
-    for i in range(1, n + 1):
-        if ma_short[-i] <= ma_long[-i]:
-            hold_cond = False
-            break
-    return cross_cond and hold_cond
-
-
-def is_price_break_ma(price, ma_line, direction='down'):
-    if len(price) < 2 or len(ma_line) < 2:
-        return False
-    if direction == 'down':
-        return price[0] < ma_line[0] and price[-1] >= ma_line[-1]
-    else:
-        return price[0] > ma_line[0] and price[-1] <= ma_line[-1]
-
-
-def is_macd_bottom_divergence(price, macd, n=10):
-    if len(price) < n or len(macd) < n:
-        return False
-    price_low = min(price[-i] for i in range(n))
-    macd_low = min(macd[-i] for i in range(n))
-    return price[0] <= price_low and macd[0] > macd_low
-
-
 # ===================== 【2】核心策略 =====================
 class MACDOptStrategy(bt.Strategy):
     params = (
@@ -196,7 +151,7 @@ class MACDOptStrategy(bt.Strategy):
         ('single_loss_limit', 0.05),
         ('kdj_period', 9), ('kdj_k_period', 3), ('kdj_d_period', 3),
         # 新增：板块类型参数，适配换手率/量比阈值（大盘蓝筹/中小盘成长/题材股/周期股）
-        ('stock_type', 'mid_small'),  # default: 中小盘成长，可选：blue_chip/topic/cycle
+        ('stock_type', '中盘股'),  # default: 中小盘成长，可选：blue_chip/topic/cycle
         # 乖离率周期
         ('bias6_period', 6),
     )
@@ -252,7 +207,8 @@ class MACDOptStrategy(bt.Strategy):
         self.vol = self.data.volume
         self.turnover = self.data.turnover
         # 2. 计算均量线（滑动平均，backtrader内置SMA函数）
-        self.vol5 = bt.indicators.SMA(self.vol, period=5)
+        self.volume_ma5 = bt.indicators.SMA(self.data.volume, period=5)  # 评分系统用这个名
+        self.vol5 = self.volume_ma5
         self.vol10 = bt.indicators.SMA(self.vol, period=10)
         # MACD指标 - 修复版（和券商完全一致，无参数冲突）
         # 1. 定义【券商标准】的非调整型EMA（核心：第一个参数是data，第二个是period）
@@ -267,8 +223,8 @@ class MACDOptStrategy(bt.Strategy):
             # movav=ema_broker  # 传入正确的自定义EMA
         )
         # 直接使用内置线，无需手动计算，和券商一致
-        self.macd_line = self.macd.macd  # MACD线
-        self.signal_line = self.macd.signal  # 信号线
+        self.macd_diff = self.macd.macd  # MACD线
+        self.macd_signal = self.macd.signal  # 信号线
         self.macd_hist = self.macd.histo  # 柱状图（macd线 - 信号线，券商标准）
 
         # 周线MACD同步修复（和日线保持一致，适配跨周期判断）
@@ -329,6 +285,8 @@ class MACDOptStrategy(bt.Strategy):
         self.volume_ratio = self.data0.volume / self.volume_5ma
         # 乖离率BIAS6（6日）- 手册动量类0.5分核心指标
         self.bias6 = BIAS(self.data0.close, period=self.p.bias6_period)
+        self.bias12 = BIAS(self.data0.close, period=12)
+        self.bias24 = BIAS(self.data0.close, period=24)
         # 北向资金占位（需对接实盘数据接口，如tushare/akshare）
         self.north_capital = 0.0  # 正数=净流入，负数=净流出，单位：万元
         # 筹码峰占位（需对接实盘数据接口，返回获利盘比例）
@@ -339,6 +297,35 @@ class MACDOptStrategy(bt.Strategy):
 
         # ===================== 新增：分数拆解存储 - 关键！用于命令行打印具体分项 =====================
         self.daily_score_log = {}  # 键：日期字符串（YYYY-MM-DD），值：{buy_score:总得分, buy_details:分项字典, sell_score:总得分, sell_details:分项字典}
+
+        # KDJ别名（适配tradescore的变量名）
+        self.kdj_k = self.k
+        self.kdj_d = self.d
+        self.kdj_j = self.j
+
+        # BOLL别名
+        self.boll_upper = self.boll.top
+        self.boll_mid = self.boll.mid
+        self.boll_lower = self.boll.bot
+
+        # BIAS别名
+        self.bias12 = BIAS(self.data0.close, period=12)
+        self.bias24 = BIAS(self.data0.close, period=24)
+
+        # 成交量5日均线
+        self.vol5ma = self.vol5
+
+        # 股票类型参数（适配tradescore）
+        if self.p.stock_type == 'blue_chip':
+            self.p.stock_type = '大盘股'
+        elif self.p.stock_type == 'mid_small':
+            self.p.stock_type = '中盘股'
+        elif self.p.stock_type == 'topic':
+            self.p.stock_type = '小盘股'
+        elif self.p.stock_type == 'cycle':
+            self.p.stock_type = '小盘股'
+
+
 
     def get_current_indicators(self):
         """获取当前周期所有指标的数值，返回字典"""
@@ -448,7 +435,7 @@ class MACDOptStrategy(bt.Strategy):
             self.order = None
 
     def notify_trade(self, trade):
-        """新增：详细记录每笔交易的盈亏日志（包含下单时的指标值）"""
+        """新增：详细记录每笔交易的盈亏日志（包含下单时的指标值 + 总评分）"""
         if trade.isclosed:
             self.total_trades += 1
 
@@ -464,6 +451,14 @@ class MACDOptStrategy(bt.Strategy):
             # 获取买卖下单时的指标值
             buy_indicators = self.current_position_info['buy_indicators']
             sell_indicators = self.current_position_info['sell_indicators']
+
+            # ========== 新增：获取买卖日期对应的总评分 ==========
+            # 转换日期格式为 YYYY-MM-DD（匹配 daily_score_log 的键）
+            buy_date_str = buy_date.strftime('%Y-%m-%d') if buy_date else ""
+            sell_date_str = sell_date.strftime('%Y-%m-%d') if sell_date else ""
+            # 从每日评分日志中提取总评分（处理日期不存在的情况）
+            buy_total_score = self.daily_score_log.get(buy_date_str, {}).get('buy_score', np.nan)
+            sell_total_score = self.daily_score_log.get(sell_date_str, {}).get('buy_score', np.nan)
 
             # 计算交易数量（使用买入时的数量）
             trade_size = self.current_position_info['buy_size']
@@ -495,21 +490,25 @@ class MACDOptStrategy(bt.Strategy):
                 self.total_lose_pnl += abs(trade_pnlcomm)
                 trade_result = "亏损"
 
-            # 生成交易日志（包含买卖下单时的指标值）
+            # 生成交易日志（包含买卖下单时的指标值 + 总评分）
             self.trade_id += 1
             trade_log = {
                 "交易编号": self.trade_id,
                 "开仓日期": buy_date.strftime('%Y-%m-%d') if buy_date else "未知",
                 "平仓日期": sell_date.strftime('%Y-%m-%d') if sell_date else "未知",
                 "持仓天数": trade_duration,
+                "盈亏(不含手续费)": round(trade_pnl, 2),
                 "买入价格": round(buy_price, 2),
                 "卖出价格": round(sell_price, 2),
+                # ========== 新增：总评分字段 ==========
+                "买入时总评分": round(buy_total_score, 2) if not np.isnan(buy_total_score) else "",
+                "卖出时总评分": round(sell_total_score, 2) if not np.isnan(sell_total_score) else "",
                 "交易数量": abs(trade_size),
-                "盈亏(不含手续费)": round(trade_pnl, 2),
                 "盈亏(含手续费)": round(trade_pnlcomm, 2),
                 "盈亏类型": trade_result,
                 "手续费": round(abs(trade.pnl - trade.pnlcomm), 2),
-                # ===== 新增：买入下单时的指标值 =====
+
+                # ===== 买入下单时的指标值 =====
                 "买入时MA5": buy_indicators.get('MA5', np.nan),
                 "买入时MA10": buy_indicators.get('MA10', np.nan),
                 "买入时MA20": buy_indicators.get('MA20', np.nan),
@@ -533,7 +532,7 @@ class MACDOptStrategy(bt.Strategy):
                 "买入时MA200趋势": buy_indicators.get('MA200趋势', "未知"),
                 "买入时KDJ是否金叉": buy_indicators.get('KDJ是否金叉', False),
                 "买入时MACD是否金叉": buy_indicators.get('MACD是否金叉', False),
-                # ===== 新增：卖出下单时的指标值 =====
+                # ===== 卖出下单时的指标值 =====
                 "卖出时MA5": sell_indicators.get('MA5', np.nan),
                 "卖出时MA10": sell_indicators.get('MA10', np.nan),
                 "卖出时MA20": sell_indicators.get('MA20', np.nan),
@@ -649,8 +648,8 @@ class MACDOptStrategy(bt.Strategy):
         trend_bear = not trend_bull
         # 动量类：KDJ+RSI+BIAS6
         momentum_bull = (
-                    self.kdj_gold_cross[0] > 0 and self.rsi6[0] < 70 and self.bias6[0] < self._get_plate_thresholds()[
-                'bias6_overbuy'])
+                self.kdj_gold_cross[0] > 0 and self.rsi6[0] < 70 and self.bias6[0] < self._get_plate_thresholds()[
+            'bias6_overbuy'])
         momentum_bear = not momentum_bull
         # 量能类：成交量+换手率+量比
         volume_bull = (self.data0.volume[0] > self.vol10[0] * 1.2 and self.volume_ratio[0] > 1.2 and
@@ -676,429 +675,86 @@ class MACDOptStrategy(bt.Strategy):
         return 0.5 if conflict_count == 0 else (-0.5 if conflict_count >= 2 else 0)
 
     def next(self):
+        # 添加数据长度检查，避免前期指标计算不准确
+        if len(self.data) < 60:  # 确保有足够数据计算MA60等
+            return
+
         # 200日均线趋势判断
-        self.ma200_slope, self.ma200_trend = get_ma_trend_global(self.ma200, 10, 0.0005)
-        price_above_ma200 = (self.data.close[0] - self.ma200[0]) / self.ma200[0] >= 0.001
-        macd_above_zero = self.macd.macd[0] > 0 and self.macd.signal[0] > 0
-        macd_below_zero = self.macd.macd[0] < 0 and self.macd.signal[0] < 0
-        macd_gold_cross = self.mcross[0] > 0
-        macd_dead_cross = self.mcross[0] < 0
-        macd_double_up = self.macd.macd[0] > self.macd.macd[-1] and self.macd.signal[0] > self.macd.signal[-1]
-        macd_diff_up = self.macd.macd[0] > self.macd.macd[-1]
-        macd_diff_over_signal = self.macd.macd[0] > self.macd.signal[0]
+        if len(self.ma200) >= 10:
+            self.ma200_slope, self.ma200_trend = btfinplot.get_ma_trend_global(self.ma200, 10, 0.0005)
+        else:
+            self.ma200_slope, self.ma200_trend = 0.0, "未知"
 
-        # 最近三天不是MACD死叉
-        macd_not_dead = self.mcross[0] >= 0 and self.mcross[-1] >= 0 and self.mcross[-2] >= 0
+        # ========== 核心修正1：严格按手册计算总评分和决策 ==========
+        total_score, decision, details = btfinplot.calculate_total_score(self)
 
-        # KDJ金叉/死叉判断
-        kdj_gold_cross = self.kdj_gold_cross[0] > 0
-        kdj_dead_cross = self.kdj_gold_cross[0] < 0
-        kdj_overbuy = self.k[0] > 80
-        kdj_oversell = self.k[0] < 20
-        # J线拐头向下
-        kdj_j_turndown = self.j[-1] > self.j[0] and self.k[-1] > 80
-        # 预判KDJ金叉，三线汇聚（风险较大）
-        kdj_convergence = abs((self.j[-1] - self.k[-1])) > abs((self.j[-1] - self.k[0])) and abs(
-            self.k[-1] - self.d[-1]) > abs(self.k[-1] - self.d[0]) and self.d[0] > self.k[0] > self.j[0]
-
-        # ===================== 核心补全：买入评分 buy_score 12.5分制（严格遵循手册）=====================
-        buy_score = 0.0
-        plate_thresh = self._get_plate_thresholds()  # 板块适配阈值
-        close = self.data0.close[0]
-
-        # 避免除零错误
-        def safe_div(a, b):
-            return a / b if b != 0 else 0
-
-        # 买入分数拆解 - 新增：记录每个分项的得分
-        buy_details = {}
-
-        # 1. 趋势类（4分）- 均线排列(2分) + 布林带(2分)
-        ## 均线排列打分（手册标准）
-        def get_ma_buy_score(self):
-            if self.p.stock_type == 'blue_chip':
-                ma_full_bull = self.ma5[0] > self.ma10[0] > self.ma20[0] > self.ma60[0] and close > self.ma200[0]
-            elif self.p.stock_type == 'cycle':
-                ma_full_bull = self.ma5[0] > self.ma10[0] and close > self.ma60[0]
-            else:
-                ma_full_bull = self.ma5[0] > self.ma10[0] > self.ma20[0]
-            ma_short_bull = self.ma5[0] > self.ma10[0] > self.ma20[0]
-            if ma_full_bull:
-                return 2.0  # 完全多头+长期趋势向上
-            elif ma_short_bull:
-                return 1.0  # 短期多头
-            else:
-                return 0.0  # 均线混乱/空头
-
-        ma_buy = get_ma_buy_score(self)
-        buy_details['趋势类-均线排列'] = ma_buy
-        buy_score += ma_buy
-
-        def get_boll_buy_score(self):
-            ## 布林带打分（手册标准+板块偏离度）
-            boll_mid_break = close > self.boll_mid[0] and self.data0.close[-1] < self.boll_mid[-1]  # 从下轨突破中轨
-            boll_dev = safe_div(close - self.boll_mid[0], self.boll_upper[0] - self.boll_mid[0]) * 100
-            boll_收口 = (self.boll_upper[0] - self.boll_lower[0]) < (self.boll_upper[-1] - self.boll_lower[-1])
-            if boll_mid_break and boll_dev < 30:
-                return 2.0  # 从下轨突破中轨+偏离度<30%
-            elif self.boll_mid[0] < close < self.boll_upper[0] and 30 <= boll_dev <= plate_thresh['boll_dev_overbuy']:
-                return 1.0  # 中轨-上轨间+未超买
-            else:
-                return 0.0  # 上轨附近+布林收口
-
-        boll_buy = get_boll_buy_score(self)
-        buy_details['趋势类-布林带'] = boll_buy
-        buy_score += boll_buy
-
-        # 2. 动量类（4.5分）- KDJ(2分) + RSI(2分) + 乖离率BIAS6(0.5分)
-        ## KDJ打分（手册标准：超卖区金叉优先）
-        def get_kdj_buy_score(self):
-            kdj_20_gold = self.j[-1] < 20 and kdj_gold_cross
-            kdj_50_gold = 20 <= self.j[-1] <= 50 and kdj_gold_cross
-            if kdj_20_gold:
-                return 2.0  # 20超卖区金叉
-            elif kdj_50_gold:
-                return 1.0  # 50以下金叉
-            else:
-                return 0  # 50以上金叉/超买
-
-        kdj_buy = get_kdj_buy_score(self)
-        buy_details['动量类-KDJ'] = kdj_buy
-        buy_score += kdj_buy
-
-        # def get_rsi_buy_score(self):
-        #     ## RSI6打分（手册标准：超卖区突破50）
-        #     rsi_break50 = self.rsi6[0] > 50 and self.rsi6[-1] < 30
-        #     if rsi_break50:
-        #         return 2.0  # 从30超卖区突破50
-        #     elif 30 <= self.rsi6[0] <= 50:
-        #         return 1.0  # 震荡区30-50
-        #     else:
-        #         return 0.0  # 50以上/接近70超买
-
-        def get_rsi_buy_score(self):
-            """
-            实战版RSI买入评分（突破50即得分，不卡70上限）
-            核心规则（贴合实战趋势判断）：
-            2分：超卖区强突破 → 前1日RSI6<30 + 当日RSI6>50（无70上限）
-            1分：非超卖区突破 → 前1日30≤RSI6≤50 + 当日RSI6>50（无70上限）
-                 或 震荡蓄力 → 30≤当日RSI6≤50，连续2日波动≤1且未突破区间
-                 或 周线强势 → 周线RSI6在50-70区间（日线不适用）
-            0分：纯超买无突破 → RSI6≥70且无突破动作，或50-69但无突破/震荡动作
-            """
-            # 核心数据（self.rsi6：[0]当日，[-1]前1日，[-2]前2日）
-            current_rsi6 = self.rsi6[0]  # 当日RSI6
-            prev1_rsi6 = self.rsi6[-1]  # 前1日RSI6
-            prev2_rsi6 = self.rsi6[-2] if len(self.rsi6) >= 3 else None  # 前2日RSI6（震荡判定用）
-
-            # ===== 2分：超卖区强突破（优先级最高）=====
-            # 前1日<30（超卖）+ 当日>50（突破）→ 哪怕到80/90都算2分（强反弹）
-            if prev1_rsi6 < 30 and current_rsi6 > 50:
-                return 2.0
-
-            # ===== 1分：实战核心（突破即得分，不卡70）=====
-            # 场景1：非超卖区突破 → 前1日30-50 + 当日>50（哪怕70+）
-            non_oversold_break = (30 <= prev1_rsi6 <= 50) and (current_rsi6 > 50)
-
-            # 场景2：震荡蓄力 → 30-50区间+连续2日低波动（原规则保留）
-            oscillation_condition = False
-            if 30 <= current_rsi6 <= 50 and prev2_rsi6 is not None:
-                no_breakout = (30 <= prev1_rsi6 <= 50) and (30 <= current_rsi6 <= 50)
-                price_fluct = abs(current_rsi6 - prev1_rsi6) <= 1.0
-                oscillation_condition = no_breakout and price_fluct
-
-            # 场景3：周线特殊 → 周线50-70（原规则保留）
-            weekly_special = False
-            if hasattr(self, 'period') and self.period == 'weekly':
-                weekly_special = 50 <= current_rsi6 <= 70
-
-            # 满足1分任一场景 → 不管突破到60/70/80，都给1分
-            if non_oversold_break or oscillation_condition or weekly_special:
-                return 1.0
-
-            # ===== 0分：纯超买/无突破（风控底线）=====
-            # 仅当：1) RSI≥70且无突破动作 或 2) 50-69但无任何突破/震荡动作
-            if current_rsi6 >= 70 or (50 <= current_rsi6 <= 69):
-                return 0.0
-
-            # 兜底：未匹配任何场景 → 0分（防御性编程）
-            return 0.0
-
-        rsi_buy = get_rsi_buy_score(self)
-        buy_details['动量类-RSI6'] = rsi_buy
-        buy_score += rsi_buy
-
-        ## 乖离率BIAS6打分（手册标准：超跌得0.5分）
-        def get_bias_buy_score(self):
-            if self.bias6[0] < plate_thresh['bias6_oversell']:
-                return 0.5  # 超跌，偏离均线过多
-            else:
-                return 0.0
-
-        bias_buy = get_bias_buy_score(self)
-        buy_details['动量类-乖离率BIAS6'] = bias_buy
-        buy_score += bias_buy
-
-        # 3. 量能/资金类（3分）- 成交量(1分) + 换手率(1分) + 量比(0.5分) + 北向资金(0.5分)
-        ## 成交量打分（手册标准：放量上涨+量价同步）
-        def get_vol_buy_score(self):
-            up = close > self.data0.close[-1]
-            vol_ratio = safe_div(self.vol[0], self.vol10[0])
-            if up and vol_ratio > 1.5:
-                return 1.0  # 放量上涨+量价同步
-            else:
-                return 0.0
-
-        vol_buy = get_vol_buy_score(self)
-        buy_details['量能类-成交量'] = vol_buy
-        buy_score += vol_buy
-
-        ## 换手率打分（手册标准：按板块适配区间）
-        def get_turnover_buy_score(self):
-            to_min, to_max = plate_thresh['turnover_buy']
-            if to_min <= self.turnover[0] <= to_max:
-                return 1.0  # 板块适配活跃区间
-            else:
-                return 0.0  # 过低低迷/过高拥挤
-
-        turnover_buy = get_turnover_buy_score(self)
-        buy_details['量能类-换手率'] = turnover_buy
-        buy_score += turnover_buy
-
-        ## 量比打分（手册标准：温和放量）
-        def get_vr_buy_score(self):
-            vr_min, vr_max = plate_thresh['vol_ratio_buy']
-            if vr_min <= self.volume_ratio[0] <= vr_max:
-                return 0.5  # 温和放量
-            else:
-                return 0.0  # 缩量/过度放量
-
-        vr_buy = get_vr_buy_score(self)
-        buy_details['量能类-量比'] = vr_buy
-        buy_score += vr_buy
-
-        ## 北向资金打分（手册标准：当日净流入>5000万）
-        def get_north_capital_buy_score(self):
-            if self.north_capital > plate_thresh['north_buy']:
-                return 0.5  # 外资加仓
-            else:
-                return 0.0  # 外资减仓/无数据
-
-        north_buy = get_north_capital_buy_score(self)
-        buy_details['量能类-北向资金'] = north_buy
-        buy_score += north_buy
-
-        # 4. 筹码类（1分）- 筹码峰（手册标准）
-        def get_profit_ratio_buy_score(self):
-            if self.profit_ratio > 80:  # 价格在筹码峰上方，获利盘>80%
-                return 1.0
-            else:
-                return 0.0  # 套牢盘>60%，筹码分散
-
-        profit_buy = get_profit_ratio_buy_score(self)
-        buy_details['筹码类-获利盘比例'] = profit_buy
-        buy_score += profit_buy
-
-        # 5. 信号冲突修正（±0.5分）- 手册标准
-        conflict_buy = self._judge_indicator_conflict(is_buy=True)
-        buy_details['信号冲突修正'] = conflict_buy
-        buy_score += conflict_buy
-
-        # 买入分数最终四舍五入保留2位
-        buy_score = round(buy_score, 2)
-
-        # ===================== 核心补全：卖出评分 sell_score 12.5分制（严格遵循手册）=====================
-        sell_score = 0.0
-        sell_details = {}
-
-        ## 辅助判断：连续2日收盘价跌破（手册有效跌破标准）
-        def two_day_break(price, line):
-            return price[0] < line[0] and price[-1] < line[-1]
-
-        # 1. 趋势类（4分）- 均线排列(2分) + 布林带(2分)
-        ## 均线排列打分（手册标准：有效跌破+死叉）
-        def get_ma_sell_score(self):
-            ma10_break = two_day_break(self.data0.close, self.ma10) and self.ma5[0] < self.ma10[0]
-            ma5_break = is_price_break_ma(self.data0.close, self.ma5, direction='down')
-            if ma10_break:
-                return 2.0  # 有效跌破MA10+MA5死叉MA10
-            elif ma5_break:
-                return 1.0  # 单日跌破MA5未破MA10
-            else:
-                return 0.0
-
-        ma_sell = get_ma_sell_score(self)
-        sell_details['趋势类-均线排列'] = ma_sell
-        sell_score += ma_sell
-
-        ## 布林带打分（手册标准：有效跌破中轨/超买收口）
-        def get_boll_sell_score(self):
-            boll_mid_break_sell = two_day_break(self.data0.close, self.boll_mid)
-            boll_dev = safe_div(close - self.boll_mid[0], self.boll_upper[0] - self.boll_mid[0]) * 100
-            boll_收口 = (self.boll_upper[0] - self.boll_lower[0]) < (self.boll_upper[-1] - self.boll_lower[-1])
-            boll_overbuy_close = close > self.boll_upper[0] and boll_dev > plate_thresh['boll_dev_overbuy'] and boll_收口
-            if boll_mid_break_sell:
-                return 2.0  # 从上轨有效跌破中轨
-            elif boll_overbuy_close:
-                return 1.0  # 上轨超买+布林收口
-            else:
-                return 0.0
-
-        boll_sell = get_boll_sell_score(self)
-        sell_details['趋势类-布林带'] = boll_sell
-        sell_score += boll_sell
-
-        # 2. 动量类（4.5分）- KDJ(2分) + RSI(2分) + 乖离率BIAS6(0.5分)
-        ## KDJ打分（手册标准：超买区死叉优先）
-        def get_kdj_sell_score(self):
-            kdj_80_dead = self.j[-1] > 80 and kdj_dead_cross
-            kdj_50_dead = 50 <= self.j[-1] <= 80 and kdj_dead_cross
-            if kdj_80_dead:
-                return 2.0  # 80超买区死叉
-            elif kdj_50_dead:
-                return 1.0  # 50以上死叉
-            else:
-                return 0.0  # 50以下死叉/超卖
-
-        kdj_sell = get_kdj_sell_score(self)
-        sell_details['动量类-KDJ'] = kdj_sell
-        sell_score += kdj_sell
-
-        ## RSI6打分（手册标准：超买区跌破50）
-        def get_rsi_sell_score(self):
-            rsi_break50_sell = self.rsi6[0] < 50 and self.rsi6[-1] > 70
-            if rsi_break50_sell:
-                return 2.0  # 从70超买区跌破50
-            elif 50 <= self.rsi6[0] <= 70:
-                return 1.0  # 震荡区50-70
-            else:
-                return 0.0  # 50以下/接近30超卖
-
-        rsi_sell = get_rsi_sell_score(self)
-        sell_details['动量类-RSI6'] = rsi_sell
-        sell_score += rsi_sell
-
-        ## 乖离率BIAS6打分（手册标准：超涨得0.5分）
-        def get_bias_sell_score(self):
-            if self.bias6[0] > plate_thresh['bias6_overbuy']:
-                return 0.5  # 超涨，偏离均线过多
-            else:
-                return 0.0
-
-        bias_sell = get_bias_sell_score(self)
-        sell_details['动量类-乖离率BIAS6'] = bias_sell
-        sell_score += bias_sell
-
-        # 3. 量能/资金类（3分）- 成交量(1分) + 换手率(1分) + 量比(0.5分) + 北向资金(0.5分)
-        ## 成交量打分（手册标准：放量下跌+量价背离）
-        def get_vol_sell_score(self):
-            down = close < self.data0.close[-1]
-            vol_ratio = safe_div(self.vol[0], self.vol10[0])
-            if down and vol_ratio > 1.5:
-                return 1.0  # 放量下跌+量价背离
-            else:
-                return 0.0
-
-        vol_sell = get_vol_sell_score(self)
-        sell_details['量能类-成交量'] = vol_sell
-        sell_score += vol_sell
-
-        ## 换手率打分（手册标准：板块适配+前5日平均低于当前50%）
-        def get_turnover_sell_score(self):
-            to_sell_thresh = plate_thresh['turnover_sell']
-            to_5ma_ratio = safe_div(self.turnover_5ma[0], self.turnover[0])
-            if self.turnover[0] > to_sell_thresh and to_5ma_ratio < 0.5:
-                return 1.0  # 板块放量出逃+换手率骤增
-            else:
-                return 0.0
-
-        turnover_sell = get_turnover_sell_score(self)
-        sell_details['量能类-换手率'] = turnover_sell
-        sell_score += turnover_sell
-
-        ## 量比打分（手册标准：放量出逃）
-        def get_vr_sell_score(self):
-            if self.volume_ratio[0] > plate_thresh['vol_ratio_sell']:
-                return 0.5  # 放量出逃
-            else:
-                return 0.0
-
-        vr_sell = get_vr_sell_score(self)
-        sell_details['量能类-量比'] = vr_sell
-        sell_score += vr_sell
-
-        ## 北向资金打分（手册标准：当日净流出>1亿）
-        def get_north_capital_sell_score(self):
-            if self.north_capital < -plate_thresh['north_sell']:
-                return 0.5  # 外资出逃
-            else:
-                return 0.0  # 外资加仓/无数据
-
-        north_sell = get_north_capital_sell_score(self)
-        sell_details['量能类-北向资金'] = north_sell
-        sell_score += north_sell
-
-        # 4. 筹码类（1分）- 筹码峰（手册标准）
-        def get_profit_ratio_sell_score(self):
-            if self.profit_ratio < 30:  # 价格跌破筹码峰，获利盘<30%
-                return 1.0
-            else:
-                return 0.0  # 仍在筹码峰上方，套牢盘<20%
-
-        profit_sell = get_profit_ratio_sell_score(self)
-        sell_details['筹码类-获利盘比例'] = profit_sell
-        sell_score += profit_sell
-        # 5. 信号冲突修正（±0.5分）- 手册标准
-        conflict_sell = self._judge_indicator_conflict(is_buy=False)
-        sell_details['信号冲突修正'] = conflict_sell
-        sell_score += conflict_sell
-
-        # 卖出分数最终四舍五入保留2位
-        sell_score = round(sell_score, 2)
-
-        # ===================== 关键：记录当日分数到日志 - 用于命令行打印 =====================
+        # 记录当日评分到日志
         current_date = self.data.datetime.date(0).strftime('%Y-%m-%d')
         self.daily_score_log[current_date] = {
-            'buy_score': buy_score,
-            'buy_details': buy_details,
-            'sell_score': sell_score,
-            'sell_details': sell_details
+            'buy_score': total_score,  # 使用tradescore的总评分
+            'buy_details': details,
+            'sell_score': -total_score,
+            'sell_details': details
         }
 
         if self.order:
             return
 
-        if not self.position:  # 无仓位，判断买入（基于手册分数区间）
-            # 手册分数区间：5-6.9分2成试仓，7+分逐步加仓，这里取≥5分作为买入阈值
-            # buy_condition = buy_score >= 4
-            # buy_condition = kdj_gold_cross
-            # buy_condition1 = self.rsi6[0] > self.rsi12[0] and  self.rsi6[-1] < self.rsi12[-1] and (self.rsi12[0] > self.rsi24[0] and  self.rsi12[-1] < self.rsi24[-1]) and self.rsi6[0] > 50 or kdj_gold_cross
-            buy_condition = self.rsi6[-1] < self.rsi6[0] and self.rsi6[0] > 50 and kdj_gold_cross
-            if buy_condition:
-                # ========== 核心新增：买入时获取并记录所有指标值 ==========
-                # print(f"current_date buy {current_date}")
+        # ========== 核心修正2：严格遵循手册的交易决策阈值 ==========
+        if not self.position:  # 无仓位
+            # 强力买入/重仓（≥12分）
+            if total_score >= btfinplot.DECISION_THRESHOLDS['强力买入']:
+                # 记录买入时的指标值
                 buy_indicators = self.get_current_indicators()
                 self.order_indicator_info['buy'] = buy_indicators
                 self.order = self.buy(exectype=bt.Order.Market)
                 pdist = self.atr[0] * self.p.atrdist
                 self.pstop = self.data0.close[0] - pdist
+                print(f"【强力买入】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+            # 积极买入/加仓（8~11.9分）
+            elif btfinplot.DECISION_THRESHOLDS['积极买入'] <= total_score < btfinplot.DECISION_THRESHOLDS['强力买入']:
+                buy_indicators = self.get_current_indicators()
+                self.order_indicator_info['buy'] = buy_indicators
+                self.order = self.buy(exectype=bt.Order.Market)
+                pdist = self.atr[0] * self.p.atrdist
+                self.pstop = self.data0.close[0] - pdist
+                print(f"【积极买入】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+            # 谨慎买入/低吸（4~7.9分）
+            # elif btfinplot.DECISION_THRESHOLDS['谨慎买入'] <= total_score < btfinplot.DECISION_THRESHOLDS['积极买入']:
+            elif 6 <= total_score < btfinplot.DECISION_THRESHOLDS['积极买入']:
+                buy_indicators = self.get_current_indicators()
+                self.order_indicator_info['buy'] = buy_indicators
+                self.order = self.buy(exectype=bt.Order.Market)
+                pdist = self.atr[0] * self.p.atrdist
+                self.pstop = self.data0.close[0] - pdist
+                print(f"【谨慎买入】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+            # 观望区间（-3.9~3.9分）
+            else:
+                # print(f"【观望】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision}")
+                pass
 
-        else:  # 有仓位，判断卖出（基于手册分数区间）
+        else:  # 有仓位
             pclose = self.data0.close[0]
             pstop = self.pstop
-            # 手册分数区间：5+分逐步减仓，≥7分清仓，这里取≥5分作为卖出阈值
-            # sell_condition = sell_score >= 5.5
-            # sell_condition = self.rsi12[0] < self.rsi24[0] and self.rsi12[-1] > self.rsi24[-1]
-            sell_condition = self.rsi6[0] < self.rsi12[0]
-            if sell_condition:
-                # ========== 核心新增：卖出时获取并记录所有指标值 ==========
+
+            # 强力卖出/空仓（≤-12分）
+            if total_score <= btfinplot.DECISION_THRESHOLDS['强力卖出']:
                 sell_indicators = self.get_current_indicators()
                 self.order_indicator_info['sell'] = sell_indicators
                 self.order = self.close(exectype=bt.Order.Market)
+                print(f"【强力卖出】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+            # 谨慎卖出/减仓（-8~-4分）
+            elif btfinplot.DECISION_THRESHOLDS['强力卖出'] < total_score <= btfinplot.DECISION_THRESHOLDS['谨慎卖出']:
+                sell_indicators = self.get_current_indicators()
+                self.order_indicator_info['sell'] = sell_indicators
+                self.order = self.close(exectype=bt.Order.Market)
+                print(f"【谨慎卖出】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+            # 观望区间（-3.9~3.9分），执行移动止损
             else:
-                # 移动止损
+                # 移动止损（保留原有逻辑）
                 pdist = self.atr[0] * self.p.atrdist
                 self.pstop = max(pstop, pclose - pdist)
+                # print(f"【持仓观望】日期：{current_date} | 总评分：{total_score:.2f} | 止损价：{self.pstop:.2f}")
 
     def stop(self):
         # ========== 原有逻辑：保存回测结果 + 交易日志 完全未动 ==========
@@ -1142,8 +798,6 @@ class MACDOptStrategy(bt.Strategy):
             print(f"\n✅ 每笔交易盈亏日志（含指标）已保存到: {TRADE_LOG_FILE}")
         else:
             print("\n⚠️ 本次回测无交易记录")
-
-
 
 
 DATASETS = {
@@ -1362,7 +1016,7 @@ def runstrat(args=None):
     data0 = GenericCSVWithTurnover(
         dataname=dataname, reverse=False, dtformat='%Y-%m-%d',
         tmformat='%H:%M:%S',
-        datetime=0, open=2, close=3, high=4, low=5,  volume=6, openinterest=-1, **dkwargs
+        datetime=0, open=2, close=3, high=4, low=5, volume=6, openinterest=-1, **dkwargs
     )
     cerebro.adddata(data0)
     cerebro.resampledata(data0, timeframe=bt.TimeFrame.Weeks, compression=1, adjbartime=True)
@@ -1384,7 +1038,6 @@ def runstrat(args=None):
     # ============================================
     print(f"✅ 本次回测生成 买入信号: {len(strat.buy_signals)} 个 | 卖出信号: {len(strat.sell_signals)} 个")
     print(f'期末资金: {cerebro.broker.getvalue():.2f}')
-
 
     if args.target_date:
         print_target_date_score(strat, args.target_date)
