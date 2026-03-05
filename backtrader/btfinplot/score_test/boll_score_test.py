@@ -127,7 +127,7 @@ def calculate_boll_score(strategy):
     low = strategy.data.low
     close = strategy.data.close
     volume = strategy.data.volume
-    volume_ma5 = strategy.volume_ma5
+    volume_ma5 = strategy.vol5
 
     # 关键修复：索引转换为相对当前的正确位置
     var_dict = {

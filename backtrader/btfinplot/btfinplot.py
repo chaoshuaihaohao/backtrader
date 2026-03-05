@@ -804,9 +804,9 @@ def default_hover_callback(x, y, df, symbol, interval, hover_label, rsi_hover_la
             boll_txt = (f'MID: <span style="color:{colors["mid"]}">{val["mid"]:.2f}</span> | '
                         f'UP: <span style="color:{colors["up"]}">{val["up"]:.2f}</span> | '
                         f'LOW: <span style="color:{colors["lo"]}">{val["lo"]:.2f}</span> | '
-                        f'B6: <span style="color:{colors["bias6"]}">{val["b6"]:+.1f}%</span> | '
-                        f'B12: <span style="color:{colors["bias12"]}">{val["b12"]:+.1f}%</span> | '
-                        f'B24: <span style="color:{colors["bias24"]}">{val["b24"]:+.1f}%</span>')
+                        f'B6: <span style="color:{colors["bias6"]}">{val["b6"]:+.2f}</span> | '
+                        f'B12: <span style="color:{colors["bias12"]}">{val["b12"]:+.2f}</span> | '
+                        f'B24: <span style="color:{colors["bias24"]}">{val["b24"]:+.2f}</span>')
 
     if boll_hover_label is not None:
         ax5_rect = ax5.boundingRect()

@@ -10,6 +10,60 @@ PRICE_POSITION_KDJ_COEFF = {
 }
 
 
+def is_kdj_about_to_golden_cross_v4(self, window=5):
+    """
+    基于 KDJ 历史波动率的动态阈值 (纯 Backtrader 实现)
+
+    逻辑：利用 Backtrader 内置的统计函数计算过去N天K-D距离的标准差，
+          动态调整“即将金叉”的判定阈值。
+    """
+    # 1. 安全检查：确保数据长度足够
+    if len(self.k) <= window:
+        return False
+
+    # 2. 获取历史数据 (使用 Backtrader 的切片语法 [-window:] 获取最近window个值)
+    # 注意：backtrader 的索引 0 是当前，-1 是上一根，切片遵循 Python 列表习惯
+    k_hist = self.k.get(size=window)  # 返回一个包含 window 个数值的列表
+    d_hist = self.d.get(size=window)
+
+    # 3. 计算历史距离的标准差 (使用 Python 内置的 statistics 模块或手动计算)
+    # 方案 A: 使用 Python 内置 statistics (推荐，无需 numpy)
+    import statistics
+
+    # 计算过去 window 天 K 和 D 的绝对距离列表
+    dist_history = [abs(k - d) for k, d in zip(k_hist, d_hist)]
+
+    # 计算标准差
+    try:
+        historical_std = statistics.stdev(dist_history) if len(dist_history) > 1 else dist_history[0]
+    except statistics.StatisticsError:
+        # 如果数据全是相同的导致无法计算标准差，使用均值作为替代
+        historical_std = statistics.mean(dist_history)
+
+    # 4. 计算动态阈值
+    dynamic_threshold = historical_std * 0.5  # 取标准差的一半
+    dynamic_threshold = max(dynamic_threshold, 1.0)  # 保底值
+
+    # 5. 当前状态判断 (这部分逻辑不变)
+    current_k = self.k[0]
+    current_d = self.d[0]
+    prev_k = self.k[-1]
+    prev_d = self.d[-1]
+
+    condition_not_crossed = current_k <= current_d  # 未金叉
+    condition_k_rising = current_k > prev_k  # K线向上
+    condition_distance_close = abs(current_k - current_d) < dynamic_threshold  # 距离够近
+    condition_d_stable = (current_d - prev_d) >= -1.5  # D线未垂直暴跌
+
+    # 6. 综合判断
+    if (condition_not_crossed and
+            condition_k_rising and
+            condition_distance_close and
+            condition_d_stable):
+        return True
+
+    return False
+
 def _get_kdj_rule_table(strategy):
     """
     动态生成KDJ评分规则表（绑定策略对象用于条件判断）
@@ -25,57 +79,42 @@ def _get_kdj_rule_table(strategy):
     - turnover: 换手率序列，[0]当前值；turnover_low_threshold: 低换手阈值
     """
     return [
-        # ===================== 最高（趋势反转）- 权重2.0 =====================
-        # {"priority": "最高（趋势反转）",
-        #  "signal_type": "dynamic",
-        #  "description": "低位反转金叉",
-        #  "code_condition": lambda: (strategy.k[0] > strategy.d[0] and strategy.k[-1] < strategy.d[-1] and  # kdj金叉
-        #                             strategy.k[-1] < 30 and strategy.d[-1] < 30),
-        #  "confirm_condition": lambda: (
-        #      # 核心必满足：MA60向上 + 放量
-        #          (strategy.price[0] >= strategy.ma60[0] and strategy.ma60[0] >= strategy.ma60[-1]) and
-        #          (strategy.vol[0] >= 1.5 * strategy.vol5[0]) and
-        #          # 辅助至少1项：RSI6超卖 / BIAS超卖 / MACD DIFF≥DEA
-        #          (strategy.rsi6[0] < 30 or strategy.bias6[0] < -5 or strategy.macd_diff[0] >=
-        #           strategy.macd_dea[0])),
-        #  "buy_score": 2.0, "sell_score": 0.0, "signal_type_weight": 2.0, "is_extreme": False
-        #  },
-        {"priority": "最高（趋势反转）",
-         "signal_type": "dynamic",
-         "description": "低位反转金叉",
-         "code_condition": lambda: (
-                 strategy.k[0] > strategy.d[0] and strategy.k[-1] < strategy.d[-1] and  # KDJ金叉
-                 strategy.k[-1] < 30 and strategy.d[-1] < 30 and  # 金叉前处于超卖区
-                 strategy.k[0] - strategy.k[-1] >= 3  # K线从低位快速回升（排除粘合金叉）
-         ),
-         "confirm_condition": lambda: (
-             # 核心1：趋势不弱（MA60走平/向上，股价不跌破MA60太多）
-                 (strategy.price[0] >= strategy.ma60[0] * 0.98 and strategy.ma60[0] >= strategy.ma60[-1] * 0.995) and
-                 # 核心2：量能合理（温和放量，排除天量诱多）
-                 (1.2 * strategy.vol_5ma[0] <= strategy.vol[0] <= 3.0 * strategy.vol_5ma[0]) and
-                 # 核心3：辅助至少1项（兼容低位反转的指标特征）
-                 (
-                         strategy.rsi6[0] < 35 or  # RSI轻微超卖（放宽一点，避免漏信号）
-                         strategy.bias6[0] < -4 or  # BIAS超卖（比-5放宽，适配不同股票）
-                         (strategy.macd_diff[0] >= strategy.macd_dea[0] - 0.3 and strategy.macd_bar[0] >
-                          strategy.macd_bar[-1])  # MACD绿柱缩短/即将金叉
-                 )
-         ),
-         "buy_score": 2.0, "sell_score": 0.0, "signal_type_weight": 2.0, "is_extreme": False
-         },
-        {"priority": "最高（趋势反转）",
-         "signal_type": "dynamic",
-         "description": "高位反转死叉",
-         "code_condition": lambda: (strategy.k[0] < strategy.d[0] and strategy.k[-1] > strategy.d[-1] and  # kdj金叉
-                                    strategy.k[-1] > 80 and strategy.d[-1] > 80),
-         "confirm_condition": lambda: (
-             # 核心必满足：MA60向上 + 放量
-                 (strategy.vol[0] >= 1.5 * strategy.vol_5ma[0]) and
-                 # 辅助至少1项：RSI6超卖 / BIAS超卖 / MACD DIFF≥DEA
-                 (strategy.rsi6[0] > 70 or strategy.bias6[0] > 5 or strategy.macd_diff[0] >=
-                  strategy.macd_dea[0])
-         ),
-         "buy_score": 0.0, "sell_score": 2.0, "signal_type_weight": 2.0, "is_extreme": False},
+        {
+             "priority": "最高（趋势反转）",
+             "signal_type": "dynamic",
+             "description": "低位反转金叉",
+             "code_condition": lambda: (
+                 (strategy.kdj_gold_cross[0] > 0 or  # KDJ金叉
+                  is_kdj_about_to_golden_cross_v4(strategy)
+                  ) and
+                     # strategy.k[-1] < 60 and strategy.d[-1] < 60 and  # 金叉前处于超卖区
+                     strategy.k[0] - strategy.k[-1] >= 3  # K线从低位快速回升（排除粘合金叉）
+             ),
+             "confirm_condition": lambda: (
+                     (
+                      # strategy.vol[0] > (strategy.vol5[0] * 1.2) and  # 成交量显著放大
+                      # strategy.rsi6[0] > strategy.rsi6[-1] and strategy.rsi12[0] > strategy.rsi12[-1] and   # rsi向上
+                      # strategy.macd_hist[0] > strategy.macd_hist[-1] and    # MACD绿柱缩减
+                      strategy.obv[-1] < strategy.obv[0] and strategy.ad[-1] < strategy.ad[0]
+                      )
+             ),
+             "buy_score": 2.0, "sell_score": 0.0, "signal_type_weight": 2.0, "is_extreme": False
+        },
+        {
+             "priority": "最高（趋势反转）",
+             "signal_type": "dynamic",
+             "description": "高位反转死叉",
+             "code_condition": lambda: (strategy.k[-1] > 75 and strategy.j[-1] > strategy.j[0]),  # kdj高位向下
+            # "code_condition": lambda: (strategy.k[0] < strategy.d[0] and strategy.k[-1] > strategy.d[-1]),  # kdj高位向下
+             "confirm_condition": lambda: (
+                 # 核心必满足：MA60向上 + 放量
+                     (
+                      # strategy.vol[-1] > strategy.vol[0]) and     # 大幅缩量
+                     strategy.obv[-1] > strategy.obv[0] and strategy.ad[-1] > strategy.ad[0]
+                     )
+             ),
+             "buy_score": 0.0, "sell_score": 2.0, "signal_type_weight": 2.0, "is_extreme": False
+        },
     ]
 # 优先级映射（用于排序）
 PRIORITY_ORDER = {
@@ -158,8 +197,17 @@ def calculate_kdj_score(strategy):
     for rule in KDJ_RULE_TABLE:
         try:
             # 直接执行lambda条件函数
+            # 1. 先判断核心形态
             if rule["code_condition"]():
-                matched_rules.append(rule)
+                # 2. 再判断确认条件
+                confirm_ok = True
+                # 如果规则定义了确认条件，则执行它
+                if "confirm_condition" in rule and callable(rule["confirm_condition"]):
+                    confirm_ok = rule["confirm_condition"]()
+
+                # 3. 只有两者都满足才记录
+                if confirm_ok:
+                    matched_rules.append(rule)
         except Exception as e:
             print(f"匹配规则{rule['description']}出错: {e}")
             continue

@@ -103,7 +103,7 @@ def calculate_ma_score(strategy):
 
     # 成交量数据（原生索引）
     volume_0 = strategy.volume[0]  # 当前成交量
-    volume_ma5_0 = strategy.volume_ma5[0]  # 当前5日均量
+    volume_ma5_0 = strategy.vol5[0]  # 当前5日均量
 
     # ---------------------- 高优先级：趋势启动/结束（仅基础分） ----------------------
     # 放量突破长期均线
