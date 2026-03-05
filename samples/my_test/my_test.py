@@ -202,19 +202,8 @@ class MACDOptStrategy(bt.Strategy):
         self.ma60 = bt.indicators.SMA(self.data.close, period=60)
         self.ma200 = bt.indicators.SMA(self.data.close, period=200)
 
-        # 成交量
-        # 1. 获取原始成交量（股），换算为“手”（保留整数）
-        self.vol = self.data.volume
-        self.turnover = self.data.turnover
-        # 2. 计算均量线（滑动平均，backtrader内置SMA函数）
-        self.volume_ma5 = bt.indicators.SMA(self.data.volume, period=5)  # 评分系统用这个名
-        self.vol5 = self.volume_ma5
-        self.vol10 = bt.indicators.SMA(self.vol, period=10)
-        # MACD指标 - 修复版（和券商完全一致，无参数冲突）
-        # 1. 定义【券商标准】的非调整型EMA（核心：第一个参数是data，第二个是period）
-        # ema_broker = lambda data, period: bt.indicators.EMA(data, period=period)
-
-        # 2. 直接调用MACDHisto（子类包含macd/signal/histo，无需重复创建MACD）
+        # MACD指标
+        # 直接调用MACDHisto（子类包含macd/signal/histo，无需重复创建MACD）
         self.macd = bt.indicators.MACDHisto(
             self.data0,
             period_me1=self.p.macd1,
@@ -258,7 +247,9 @@ class MACDOptStrategy(bt.Strategy):
         self.d = stoch.percD
         self.j = 3 * self.k - 2 * self.d
 
-        # ===================== 新增：布林线指标计算（backtrader内置）=====================
+        # KDJ金叉/死叉判断
+        self.kdj_gold_cross = bt.indicators.CrossOver(self.k, self.d)
+
         # 布林线核心参数：周期20（默认）、2倍标准差（默认），基于收盘价计算
         self.boll = bt.indicators.BollingerBands(
             self.data0.close,  # 基于日线收盘价计算
@@ -272,48 +263,40 @@ class MACDOptStrategy(bt.Strategy):
         # 可选：计算价格与布林线的偏离度（用于超买超卖判断）
         self.boll_percent = (self.data0.close - self.boll_lower) / (self.boll_upper - self.boll_lower) * 100
 
-        # KDJ金叉/死叉判断
-        self.kdj_gold_cross = bt.indicators.CrossOver(self.k, self.d)
-
-        # 买卖信号存储
-        self.buy_signals = []
-        self.sell_signals = []
-
-        # ===================== 新增：补全手册所需指标 =====================
+        # 成交量/换手率
+        # 1. 获取原始成交量（股），换算为“手”（保留整数）
+        self.vol = self.data.volume
+        self.vol5 = bt.indicators.SMA(self.data.volume, period=5)
+        self.vol10 = bt.indicators.SMA(self.data.volume, period=10)
+        self.turnover = self.data.turnover
+        # 前5日平均换手率（用于卖出换手率打分）
+        self.turnover_5ma = bt.indicators.SMA(self.data0.turnover, period=5)
         # 量比（当日成交量/5日平均成交量，实时计算）
-        self.volume_5ma = bt.indicators.SMA(self.data0.volume, period=5)
-        self.volume_ratio = self.data0.volume / self.volume_5ma
+        self.volume_ratio = self.data0.volume / self.vol5
+
         # 乖离率BIAS6（6日）- 手册动量类0.5分核心指标
         self.bias6 = BIAS(self.data0.close, period=self.p.bias6_period)
         self.bias12 = BIAS(self.data0.close, period=12)
         self.bias24 = BIAS(self.data0.close, period=24)
         # 北向资金占位（需对接实盘数据接口，如tushare/akshare）
+
+        # OBV
+        self.obv = bt.indicators.OnBalanceVolume(self.data)
+        # Accum/Dist
+        self.ad = bt.indicators.AccumDist(self.data)
+
         self.north_capital = 0.0  # 正数=净流入，负数=净流出，单位：万元
         # 筹码峰占位（需对接实盘数据接口，返回获利盘比例）
         self.profit_ratio = 0.0  # 获利盘比例，0-100
         self.cover_ratio = 0.0  # 套牢盘比例，0-100
-        # 前5日平均换手率（用于卖出换手率打分）
-        self.turnover_5ma = bt.indicators.SMA(self.data0.turnover, period=5)
 
         # ===================== 新增：分数拆解存储 - 关键！用于命令行打印具体分项 =====================
         self.daily_score_log = {}  # 键：日期字符串（YYYY-MM-DD），值：{buy_score:总得分, buy_details:分项字典, sell_score:总得分, sell_details:分项字典}
 
-        # KDJ别名（适配tradescore的变量名）
-        self.kdj_k = self.k
-        self.kdj_d = self.d
-        self.kdj_j = self.j
+        # 买卖信号存储
+        self.buy_signals = []
+        self.sell_signals = []
 
-        # BOLL别名
-        self.boll_upper = self.boll.top
-        self.boll_mid = self.boll.mid
-        self.boll_lower = self.boll.bot
-
-        # BIAS别名
-        self.bias12 = BIAS(self.data0.close, period=12)
-        self.bias24 = BIAS(self.data0.close, period=24)
-
-        # 成交量5日均线
-        self.vol5ma = self.vol5
 
         # 股票类型参数（适配tradescore）
         if self.p.stock_type == 'blue_chip':
@@ -498,14 +481,15 @@ class MACDOptStrategy(bt.Strategy):
                 "平仓日期": sell_date.strftime('%Y-%m-%d') if sell_date else "未知",
                 "持仓天数": trade_duration,
                 "盈亏(不含手续费)": round(trade_pnl, 2),
+                "幅度": f"{round((sell_price - buy_price) / buy_price * 100, 2)}%",
                 "买入价格": round(buy_price, 2),
                 "卖出价格": round(sell_price, 2),
                 # ========== 新增：总评分字段 ==========
                 "买入时总评分": round(buy_total_score, 2) if not np.isnan(buy_total_score) else "",
                 "卖出时总评分": round(sell_total_score, 2) if not np.isnan(sell_total_score) else "",
-                "交易数量": abs(trade_size),
                 "盈亏(含手续费)": round(trade_pnlcomm, 2),
                 "盈亏类型": trade_result,
+                "交易数量": abs(trade_size),
                 "手续费": round(abs(trade.pnl - trade.pnlcomm), 2),
 
                 # ===== 买入下单时的指标值 =====
