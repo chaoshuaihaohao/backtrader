@@ -104,12 +104,7 @@ class Calmar(bt.TimeFrameAnalyzerBase):
             self._values.append(self.strategy.broker.getvalue())
         else:
             self._values.append(self.strategy.broker.fundvalue)
-        # rann = math.log(self._values[-1] / self._values[0]) / len(self._values)
-        # 在 backtrader\analyzers\calmar.py 中修改
-        try:
-            rann = math.log(self._values[-1] / self._values[0]) / len(self._values)
-        except ValueError:
-            rann = 0  # 或者忽略这次计算
+        rann = math.log(self._values[-1] / self._values[0]) / len(self._values)
         self.calmar = calmar = rann / (self._mdd or float('Inf'))
 
         self.rets[self.dtkey] = calmar

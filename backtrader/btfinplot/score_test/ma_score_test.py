@@ -42,40 +42,214 @@ def _check_ma_divergence(strat, divergence_type):
         print(f"MA背离检测异常: {e}")
         return False
 
+# ===================== 第一步：定义 MA 规则表（Table-Driven）=====================
+# 优先级数字越小，优先级越高
+MA_RULES = [
+    {
+        "priority": 1,
+        "signal_name": "股价下跌并跌破MA5",
+        "signal_type": "趋势反转",
+        "weight": 1.0,
+        "condition_func": lambda strat: strat.data.close[-1] > strat.data.close[0] and
+            strat.data.close[0] < strat.ma5[0],
+        "buy_score": 0.0,
+        "sell_score": 2.0
+    },
+    {
+        "priority": 1,
+        "signal_name": "股价不破MA5",
+        "signal_type": "趋势反转",
+        "weight": 1.0,
+        "condition_func": lambda strat: strat.data.close[-1] > strat.data.close[0] and
+            strat.data.close[0] > strat.ma5[0],
+        "buy_score": 1.0,
+        "sell_score": 1.0
+    },
+    # ---------------- 优先级 1：趋势反转/背离 (权重最高) ----------------
+    # {
+    #     "priority": 1,
+    #     "signal_name": "底背离",
+    #     "signal_type": "趋势反转",
+    #     "weight": 2.0,
+    #     "condition_func": lambda strat: _check_ma_divergence(strat, '底背离'),
+    #     "buy_score": 2.0,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 1,
+    #     "signal_name": "顶背离",
+    #     "signal_type": "趋势反转",
+    #     "weight": 2.0,
+    #     "condition_func": lambda strat: _check_ma_divergence(strat, '顶背离'),
+    #     "buy_score": 0.0,
+    #     "sell_score": 2.0
+    # },
+    #
+    # # ---------------- 优先级 2：趋势启动/结束 (放量突破) ----------------
+    # {
+    #     "priority": 2,
+    #     "signal_name": "放量突破长期均线",
+    #     "signal_type": "趋势启动",
+    #     "weight": 1.8,
+    #     "condition_func": lambda strat: (
+    #         len(strat.data) >= 2 and
+    #         (strat.data.close > strat.ma60) and
+    #         (strat.data.close[-1] > strat.ma60[-1]) and
+    #         (strat.volume >= 1.5 * strat.vol5)
+    #     ),
+    #     "buy_score": 1.8,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 2,
+    #     "signal_name": "放量跌破长期均线",
+    #     "signal_type": "趋势结束",
+    #     "weight": 1.8,
+    #     "condition_func": lambda strat: (
+    #         len(strat.data) >= 2 and
+    #         (strat.data.close < strat.ma60) and
+    #         (strat.data.close[-1] < strat.ma60[-1]) and
+    #         (strat.volume > 1.5 * strat.vol5)
+    #     ),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.8
+    # },
+    #
+    # # ---------------- 优先级 3：金叉/死叉/形态 (动态信号) ----------------
+    # {
+    #     "priority": 3,
+    #     "signal_name": "黄金交叉",
+    #     "signal_type": "金叉/死叉",
+    #     "weight": 1.5,
+    #     "condition_func": lambda strat: (
+    #         (strat.ma5 > strat.ma10 and strat.ma5[-1] < strat.ma10[-1]) or
+    #         (strat.ma10 > strat.ma60 and strat.ma10[-1] < strat.ma60[-1])
+    #     ),
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "死亡交叉",
+    #     "signal_type": "金叉/死叉",
+    #     "weight": 1.5,
+    #     "condition_func": lambda strat: (
+    #         (strat.ma5 < strat.ma10 and strat.ma5[-1] > strat.ma10[-1]) or
+    #         (strat.ma10 < strat.ma60 and strat.ma10[-1] > strat.ma60[-1])
+    #     ),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.5
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "回踩MA60企稳",
+    #     "signal_type": "支撑/压力",
+    #     "weight": 1.5,
+    #     "condition_func": lambda strat: (
+    #         (strat.data.low >= strat.ma60 * 0.99) and
+    #         (strat.data.close > strat.data.open) and
+    #         (strat.volume < 0.8 * strat.vol5)
+    #     ),
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "反弹遇MA60回落",
+    #     "signal_type": "支撑/压力",
+    #     "weight": 1.5,
+    #     "condition_func": lambda strat: (
+    #         (strat.data.high <= strat.ma60 * 1.01) and
+    #         (strat.data.close < strat.data.open) and
+    #         (strat.volume > 1.2 * strat.vol5)
+    #     ),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.5
+    # },
+    #
+    # # ---------------- 优先级 4：排列/位置 (静态趋势) ----------------
+    # {
+    #     "priority": 4,
+    #     "signal_name": "标准多头排列",
+    #     "signal_type": "排列",
+    #     "weight": 1.2,
+    #     "condition_func": lambda strat: (
+    #         (strat.ma5 > strat.ma10 > strat.ma20 > strat.ma60) and
+    #         (strat.ma60 > strat.ma60[-1])
+    #     ),
+    #     "buy_score": 1.2,
+    #     "sell_score": 0.3
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "标准空头排列",
+    #     "signal_type": "排列",
+    #     "weight": 1.2,
+    #     "condition_func": lambda strat: (
+    #         (strat.ma5 < strat.ma10 < strat.ma20 < strat.ma60) and
+    #         (strat.ma60 < strat.ma60[-1])
+    #     ),
+    #     "buy_score": 0.3,
+    #     "sell_score": 1.2
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "股价在MA60上方",
+    #     "signal_type": "位置",
+    #     "weight": 1.0,
+    #     "condition_func": lambda strat: (strat.data.close > strat.ma60),
+    #     "buy_score": 1.0,
+    #     "sell_score": 0.3
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "股价在MA60下方",
+    #     "signal_type": "位置",
+    #     "weight": 1.0,
+    #     "condition_func": lambda strat: (strat.data.close < strat.ma60),
+    #     "buy_score": 0.3,
+    #     "sell_score": 1.0
+    # },
+    #
+    # # ---------------- 优先级 5：粘合/震荡 (低信号) ----------------
+    # {
+    #     "priority": 5,
+    #     "signal_name": "均线粘合收敛",
+    #     "signal_type": "震荡",
+    #     "weight": 0.5,
+    #     "condition_func": lambda strat: (
+    #         abs(strat.ma5 - strat.ma10) < 1 and
+    #         abs(strat.ma10 - strat.ma20) < 1 and
+    #         abs(strat.ma20 - strat.ma60) < 1
+    #     ),
+    #     "buy_score": 0.5,
+    #     "sell_score": 0.5
+    # },
+    # {
+    #     "priority": 5,
+    #     "signal_name": "均线缠绕无方向",
+    #     "signal_type": "震荡",
+    #     "weight": 0.5,
+    #     "condition_func": lambda strat: not (
+    #         (strat.ma5 > strat.ma10 > strat.ma20) or
+    #         (strat.ma5 < strat.ma10 < strat.ma20)
+    #     ),
+    #     "buy_score": 0.5,
+    #     "sell_score": 0.5
+    # }
+]
 
-# ===================== 均线评分核心函数（仅返回基础分，无权重） =====================
+
+# ===================== 第二步：通用评分计算函数 =====================
 def calculate_ma_score(strategy):
     """
-    均线评分函数（仅返回基础分，无任何权重计算）
-    :param strategy: Backtrader Strategy实例
-    :return: 基础分结果字典
+    基于规则表的 MA 评分函数
+    逻辑：遍历规则表，找到第一个匹配的规则并返回分数
     """
-    # 1. 先检测背离（仅返回基础分）
-    if _check_ma_divergence(strategy, '底背离'):
+    # 1. 检查数据长度
+    if len(strategy.data) < 10:  # 背离检测需要至少10根K线
         return {
-            "signal_type": "最高（反转）-底背离（股价新低，均线不新低）",
-            "buy_score": 2.0,  # 纯基础买分
-            "sell_score": 0.0,  # 纯基础卖分
-            "net_score": 2.0,  # 基础净分（buy - sell）
-            "triggered_signals": ["最高（反转）-底背离（股价新低，均线不新低）"],
-            "raw_buy": 2.0,
-            "raw_sell": 0.0
-        }
-    if _check_ma_divergence(strategy, '顶背离'):
-        return {
-            "signal_type": "最高（反转）-顶背离（股价新高，均线不新高）",
-            "buy_score": 0.0,
-            "sell_score": 2.0,
-            "net_score": -2.0,
-            "triggered_signals": ["最高（反转）-顶背离（股价新高，均线不新高）"],
-            "raw_buy": 0.0,
-            "raw_sell": 2.0
-        }
-
-    # 2. 检查数据长度（避免索引越界）
-    if len(strategy.data) < 2:
-        return {
-            "signal_type": "无信号",
+            "signal_type": "数据不足",
             "buy_score": 0.0,
             "sell_score": 0.0,
             "net_score": 0.0,
@@ -84,168 +258,27 @@ def calculate_ma_score(strategy):
             "raw_sell": 0.0
         }
 
-    # 3. 提取所有指标值（完全使用Backtrader原生格式）
-    # MA指标（原生索引）
-    ma5_0 = strategy.ma5[0]  # 当前MA5
-    ma5_1 = strategy.ma5[-1]  # 上一个MA5
-    ma10_0 = strategy.ma10[0]  # 当前MA10
-    ma10_1 = strategy.ma10[-1]  # 上一个MA10
-    ma20_0 = strategy.ma20[0]  # 当前MA20
-    ma60_0 = strategy.ma60[0]  # 当前MA60
-    ma60_1 = strategy.ma60[-1]  # 上一个MA60
+    # 2. 遍历规则表（按优先级顺序）
+    for rule in MA_RULES:
+        try:
+            # 执行条件函数
+            if rule["condition_func"](strategy):
+                return {
+                    "signal_type": rule["signal_type"],
+                    "signal_name": rule["signal_name"],
+                    "buy_score": rule["buy_score"],
+                    "sell_score": rule["sell_score"],
+                    "net_score": rule["buy_score"] - rule["sell_score"],
+                    "triggered_signals": [f"{rule['signal_name']}({rule['signal_type']})"],
+                    "raw_buy": rule["buy_score"],
+                    "raw_sell": rule["sell_score"]
+                }
+        except Exception as e:
+            # 防止某个规则出错导致整个策略崩溃
+            print(f"MA规则匹配异常 [{rule.get('signal_name')}]: {e}")
+            continue
 
-    # 价格数据（原生索引）
-    high_0 = strategy.data.high[0]  # 当前最高价
-    low_0 = strategy.data.low[0]  # 当前最低价
-    close_0 = strategy.data.close[0]  # 当前收盘价
-    close_1 = strategy.data.close[-1]  # 上一个收盘价
-    open_0 = strategy.data.open[0]  # 当前开盘价
-
-    # 成交量数据（原生索引）
-    volume_0 = strategy.volume[0]  # 当前成交量
-    volume_ma5_0 = strategy.vol5[0]  # 当前5日均量
-
-    # ---------------------- 高优先级：趋势启动/结束（仅基础分） ----------------------
-    # 放量突破长期均线
-    if (close_0 > ma60_0) and (close_1 > ma60_1) and (volume_0 >= 1.5 * volume_ma5_0):
-        return {
-            "signal_type": "高（趋势启动）-放量突破长期均线",
-            "buy_score": 1.8,  # 纯基础分
-            "sell_score": 0.0,
-            "net_score": 1.8,
-            "triggered_signals": ["高（趋势启动）-放量突破长期均线"],
-            "raw_buy": 1.8,
-            "raw_sell": 0.0
-        }
-    # 放量跌破长期均线
-    elif (close_0 < ma60_0) and (close_1 < ma60_1) and (volume_0 > 1.5 * volume_ma5_0):
-        return {
-            "signal_type": "高（趋势结束）-放量跌破长期均线",
-            "buy_score": 0.0,
-            "sell_score": 1.8,
-            "net_score": -1.8,
-            "triggered_signals": ["高（趋势结束）-放量跌破长期均线"],
-            "raw_buy": 0.0,
-            "raw_sell": 1.8
-        }
-
-    # ---------------------- 中高优先级：金叉/死叉/回踩/遇压（仅基础分） ----------------------
-    # 黄金交叉
-    elif ((ma5_0 > ma10_0) and (ma5_1 < ma10_1)) or ((ma10_0 > ma60_0) and (ma10_1 < ma60_1)):
-        return {
-            "signal_type": "中高（金叉）-短期上穿长期（黄金交叉）",
-            "buy_score": 1.5,
-            "sell_score": 0.0,
-            "net_score": 1.5,
-            "triggered_signals": ["中高（金叉）-短期上穿长期（黄金交叉）"],
-            "raw_buy": 1.5,
-            "raw_sell": 0.0
-        }
-    # 死亡交叉
-    elif ((ma5_0 < ma10_0) and (ma5_1 > ma10_1)) or ((ma10_0 < ma60_0) and (ma10_1 > ma60_1)):
-        return {
-            "signal_type": "中高（死叉）-短期下穿长期（死亡交叉）",
-            "buy_score": 0.0,
-            "sell_score": 1.5,
-            "net_score": -1.5,
-            "triggered_signals": ["中高（死叉）-短期下穿长期（死亡交叉）"],
-            "raw_buy": 0.0,
-            "raw_sell": 1.5
-        }
-    # 回踩MA60企稳反弹
-    elif (low_0 >= ma60_0 * 0.99) and (close_0 > open_0) and (volume_0 < 0.8 * volume_ma5_0):
-        return {
-            "signal_type": "中高（回踩支撑）-回踩MA60企稳反弹",
-            "buy_score": 1.5,
-            "sell_score": 0.0,
-            "net_score": 1.5,
-            "triggered_signals": ["中高（回踩支撑）-回踩MA60企稳反弹"],
-            "raw_buy": 1.5,
-            "raw_sell": 0.0
-        }
-    # 反弹遇MA60回落
-    elif (high_0 <= ma60_0 * 1.01) and (close_0 < open_0) and (volume_0 > 1.2 * volume_ma5_0):
-        return {
-            "signal_type": "中高（反弹遇压）-反弹遇MA60回落",
-            "buy_score": 0.0,
-            "sell_score": 1.5,
-            "net_score": -1.5,
-            "triggered_signals": ["中高（反弹遇压）-反弹遇MA60回落"],
-            "raw_buy": 0.0,
-            "raw_sell": 1.5
-        }
-
-    # ---------------------- 常规优先级：排列/位置（仅基础分） ----------------------
-    # 标准多头排列
-    elif (ma5_0 > ma10_0) and (ma10_0 > ma20_0) and (ma20_0 > ma60_0) and (ma60_0 > ma60_1):
-        return {
-            "signal_type": "常规（多头排列）-标准多头排列",
-            "buy_score": 1.2,
-            "sell_score": 0.3,
-            "net_score": 0.9,
-            "triggered_signals": ["常规（多头排列）-标准多头排列"],
-            "raw_buy": 1.2,
-            "raw_sell": 0.3
-        }
-    # 标准空头排列
-    elif (ma5_0 < ma10_0) and (ma10_0 < ma20_0) and (ma20_0 < ma60_0) and (ma60_0 < ma60_1):
-        return {
-            "signal_type": "常规（空头排列）-标准空头排列",
-            "buy_score": 0.3,
-            "sell_score": 1.2,
-            "net_score": -0.9,
-            "triggered_signals": ["常规（空头排列）-标准空头排列"],
-            "raw_buy": 0.3,
-            "raw_sell": 1.2
-        }
-    # 股价在MA60上方
-    elif close_0 > ma60_0:
-        return {
-            "signal_type": "常规（均线之上）-股价在MA60上方",
-            "buy_score": 1.0,
-            "sell_score": 0.3,
-            "net_score": 0.7,
-            "triggered_signals": ["常规（均线之上）-股价在MA60上方"],
-            "raw_buy": 1.0,
-            "raw_sell": 0.3
-        }
-    # 股价在MA60下方
-    elif close_0 < ma60_0:
-        return {
-            "signal_type": "常规（均线之下）-股价在MA60下方",
-            "buy_score": 0.3,
-            "sell_score": 1.0,
-            "net_score": -0.7,
-            "triggered_signals": ["常规（均线之下）-股价在MA60下方"],
-            "raw_buy": 0.3,
-            "raw_sell": 1.0
-        }
-
-    # ---------------------- 低优先级：粘合/震荡（仅基础分） ----------------------
-    # 多条均线粘合收敛
-    elif (abs(ma5_0 - ma10_0) < 1) and (abs(ma10_0 - ma20_0) < 1) and (abs(ma20_0 - ma60_0) < 1):
-        return {
-            "signal_type": "低（粘合整理）-多条均线粘合收敛",
-            "buy_score": 0.5,
-            "sell_score": 0.5,
-            "net_score": 0.0,
-            "triggered_signals": ["低（粘合整理）-多条均线粘合收敛"],
-            "raw_buy": 0.5,
-            "raw_sell": 0.5
-        }
-    # 均线缠绕无方向
-    elif not ((ma5_0 > ma10_0 > ma20_0) or (ma5_0 < ma10_0 < ma20_0)):
-        return {
-            "signal_type": "低（横盘震荡）-均线缠绕无方向",
-            "buy_score": 0.5,
-            "sell_score": 0.5,
-            "net_score": 0.0,
-            "triggered_signals": ["低（横盘震荡）-均线缠绕无方向"],
-            "raw_buy": 0.5,
-            "raw_sell": 0.5
-        }
-
-    # ---------------------- 无信号 ----------------------
+    # 3. 无匹配规则
     return {
         "signal_type": "无信号",
         "buy_score": 0.0,

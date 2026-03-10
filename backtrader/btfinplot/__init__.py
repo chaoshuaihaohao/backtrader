@@ -23,3 +23,4 @@ from __future__ import (absolute_import, division, print_function,
 
 from .btfinplot import *
 from .btscore import *
+from .score_test import *

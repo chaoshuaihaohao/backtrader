@@ -7,48 +7,27 @@ from . import score_test
 
 # 3. 指标最终权重（手册原版）
 INDICATOR_FINAL_WEIGHT = {
-    'MACD': 1.2,
+    'MACD': 1.0,
     'RSI': 1.0,
-    'KDJ': 1.5,
+    'KDJ': 1.0,
     'BIAS': 1.0,
     'BOLL': 1.0,
-    '均线': 2.0,
-    '成交量': 1.8,
+    '均线': 1.0,
+    '成交量': 1.0,
     '换手率': 1.0
 }
 
-
-# 4. 交易决策阈值（手册原版）
-# DECISION_THRESHOLDS = {
-#     '强力买入': 12.0,
-#     '积极买入': 8.0,
-#     '谨慎买入': 4.0,
-#     '观望': -3.9,
-#     '谨慎卖出': -4.0,
-#     '强力卖出': -12.0
-# }
-
-# ========== 新增：默认指标开关（全部开启） ==========
-# DEFAULT_INDICATOR_SWITCH = {
-#     'MACD': True,
-#     'RSI': True,
-#     'KDJ': True,
-#     'BIAS': True,
-#     'BOLL': True,
-#     '均线': True,
-#     '成交量': True,
-#     '换手率': True
-# }
-
+# ========== 修复：全局阈值初始化为字典（而非列表） ==========
 DECISION_THRESHOLDS = {
-    '强力买入': 4.0,
-    '积极买入': 3.5,
-    '谨慎买入': 1.5,
-    '观望': 0,
-    '谨慎卖出': -1.5,
-    '强力卖出': -3.0
+    '强力买入': 0.0,
+    '积极买入': 0.0,
+    '谨慎买入': 0.0,
+    '观望': 0.0,
+    '谨慎卖出': 0.0,
+    '强力卖出': 0.0
 }
 
+# ========== 新增：默认指标开关 ==========
 DEFAULT_INDICATOR_SWITCH = {
     'MACD': False,
     'RSI': False,
@@ -59,6 +38,9 @@ DEFAULT_INDICATOR_SWITCH = {
     '成交量': False,
     '换手率': False
 }
+
+# 单指标基础得分范围（-2 ~ +2）
+SINGLE_INDICATOR_SCORE_RANGE = (-2, 2)
 
 def get_ma_trend_global(ma_line, window=10, slope_threshold=0.0005):
     """
@@ -89,6 +71,50 @@ def get_ma_trend_global(ma_line, window=10, slope_threshold=0.0005):
 
     return slope, trend
 
+def calculate_dynamic_decision_thresholds(indicator_switch):
+    """
+    根据开启的指标动态计算决策阈值
+    :param indicator_switch: 指标开关字典
+    :return: 动态生成的DECISION_THRESHOLDS（字典类型）
+    """
+    # 1. 计算开启指标的总权重
+    total_weight = 0.0
+    for indicator, is_enabled in indicator_switch.items():
+        if is_enabled and indicator in INDICATOR_FINAL_WEIGHT:
+            total_weight += INDICATOR_FINAL_WEIGHT[indicator]
+
+    # 2. 单指标基础分极值（-2 ~ +2）
+    min_single_score, max_single_score = SINGLE_INDICATOR_SCORE_RANGE
+
+    # 3. 计算总得分极值（总权重 × 单指标极值）
+    max_total_score = total_weight * max_single_score
+    min_total_score = total_weight * min_single_score
+
+    # 4. 按比例分配各决策阈值（保持原比例关系）
+    # 原比例：强力买入=6, 积极买入=4.5, 谨慎买入=4, 观望=0, 谨慎卖出=-4.5, 强力卖出=-6
+    # 比例系数：强力买入=1.0, 积极买入=0.75, 谨慎买入=0.6667, 谨慎卖出=-0.75, 强力卖出=-1.0
+    thresholds = {
+        '强力买入': round(max_total_score * 1.0, 2),
+        '积极买入': round(max_total_score * 0.75, 2),
+        '谨慎买入': round(max_total_score * 0.6667, 2),
+        '观望': 0.0,
+        # '谨慎卖出': round(min_total_score * 0.75, 2),
+        '谨慎卖出': round(min_total_score * 0.75, 2),
+        '强力卖出': round(min_total_score * 1.0, 2)
+    }
+
+    return thresholds
+
+def update_global_decision_thresholds(indicator_switch=None):
+    """
+    更新全局决策阈值（供外部策略调用）
+    :param indicator_switch: 指标开关字典，默认使用DEFAULT_INDICATOR_SWITCH
+    """
+    global DECISION_THRESHOLDS  # 声明使用全局变量
+    if indicator_switch is None:
+        indicator_switch = DEFAULT_INDICATOR_SWITCH.copy()
+    DECISION_THRESHOLDS = calculate_dynamic_decision_thresholds(indicator_switch)
+
 def calculate_total_score(strat, indicator_switch=None):
     """
     严格匹配手册的总分计算函数（新增指标开关功能）
@@ -103,6 +129,9 @@ def calculate_total_score(strat, indicator_switch=None):
     for key in indicator_switch.keys():
         if key not in INDICATOR_FINAL_WEIGHT:
             raise ValueError(f"无效的指标开关键：{key}，可选键：{list(INDICATOR_FINAL_WEIGHT.keys())}")
+
+    # ========== 核心修改：动态计算决策阈值并更新全局 ==========
+    dynamic_thresholds = calculate_dynamic_decision_thresholds(indicator_switch)
 
     # 初始化各指标得分
     indicator_scores = {
@@ -179,23 +208,23 @@ def calculate_total_score(strat, indicator_switch=None):
         if indicator_switch.get(indicator, True):
             total_score += score * INDICATOR_FINAL_WEIGHT[indicator]
 
-    # ========== 严格按手册阈值判断交易决策 ==========
-    if total_score >= DECISION_THRESHOLDS['强力买入']:
+    # ========== 严格按动态阈值判断交易决策 ==========
+    if total_score >= dynamic_thresholds['强力买入']:
         decision = '强力买入/重仓'
-    elif DECISION_THRESHOLDS['积极买入'] <= total_score < DECISION_THRESHOLDS['强力买入']:
+    elif dynamic_thresholds['积极买入'] <= total_score < dynamic_thresholds['强力买入']:
         decision = '积极买入/加仓'
-    elif DECISION_THRESHOLDS['谨慎买入'] <= total_score < DECISION_THRESHOLDS['积极买入']:
+    elif dynamic_thresholds['谨慎买入'] <= total_score < dynamic_thresholds['积极买入']:
         decision = '谨慎买入/低吸'
-    elif DECISION_THRESHOLDS['谨慎卖出'] < total_score < DECISION_THRESHOLDS['谨慎买入']:
+    elif dynamic_thresholds['谨慎卖出'] < total_score < dynamic_thresholds['谨慎买入']:
         decision = '观望/震荡'
-    elif DECISION_THRESHOLDS['强力卖出'] < total_score <= DECISION_THRESHOLDS['谨慎卖出']:
+    elif dynamic_thresholds['强力卖出'] < total_score <= dynamic_thresholds['谨慎卖出']:
         decision = '谨慎卖出/减仓'
-    elif total_score <= DECISION_THRESHOLDS['强力卖出']:
+    elif total_score <= dynamic_thresholds['强力卖出']:
         decision = '强力卖出/空仓'
     else:
         decision = '观望/震荡'
 
-    # 整理详细得分（新增开关状态，便于排查）
+    # 整理详细得分（新增开关状态和动态阈值，便于排查）
     details = {
         'MACD得分': indicator_scores['MACD'],
         'RSI得分': indicator_scores['RSI'],
@@ -205,7 +234,8 @@ def calculate_total_score(strat, indicator_switch=None):
         '均线得分': indicator_scores['均线'],
         '成交量得分': indicator_scores['成交量'],
         '换手率得分': indicator_scores['换手率'],
-        '指标开关状态': indicator_switch,  # 新增：记录开关状态
+        '指标开关状态': indicator_switch,
+        '动态决策阈值': dynamic_thresholds,  # 新增：记录动态阈值
         '总得分': round(total_score, 2),
         '决策': decision
     }
@@ -214,3 +244,6 @@ def calculate_total_score(strat, indicator_switch=None):
     current_date = strat.data.datetime.date(0) if len(strat.data) > 0 else "未知日期"
     # print(f"{current_date} total_score: {details}")
     return total_score, decision, details
+
+# ========== 初始化全局阈值（程序启动时执行） ==========
+update_global_decision_thresholds(DEFAULT_INDICATOR_SWITCH)

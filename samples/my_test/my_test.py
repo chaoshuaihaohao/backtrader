@@ -21,11 +21,13 @@ import finplot as fplt
 import backtrader.btfinplot as btfinplot
 import backtrader as bt
 import matplotlib
-from PyQt6.QtWidgets import QApplication, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QLabel
-from PyQt6.QtCore import Qt
 import talib
 import pandas as pd
 import numpy as np
+
+# 只保留 PyQt5，删除所有 PyQt6
+from PyQt5.QtWidgets import QApplication, QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QLabel
+from PyQt5.QtCore import Qt, QTimer
 
 # ===================== ✅✅✅ 全局统一颜色配置【核心 - 白色背景 高对比度】✅✅✅ =====================
 # 基础色（A股习惯：红涨绿跌）
@@ -91,12 +93,14 @@ class FixedPerc(bt.Sizer):
     )
 
     def _getsizing(self, comminfo, cash, data, isbuy):
+        # 关键：取价格的绝对值计算仓位，避免负数导致size为负
+        price = abs(data.close[0])
         cashtouse = self.p.perc * cash
         if BTVERSION > (1, 7, 1, 93):
-            size = comminfo.getsize(data.close[0], cashtouse)
+            size = comminfo.getsize(price, cashtouse)
         else:
-            size = cashtouse // data.close[0]
-        return max(size, 1)  # 确保至少买入1手
+            size = cashtouse // price
+        return max(size, 1)  # 确保至少1手
 
 
 class BIAS(bt.Indicator):
@@ -124,9 +128,9 @@ class GenericCSVWithTurnover(btfeeds.GenericCSVData):
     # 你的CSV列顺序：0:date,1:股票代码,2:open,3:close,4:high,5:low,6:volume,7:amount,8:amplitude,9:pct_change,10:price_change,11:turnover
     params = (
         ('turnover', 11),  # 关键：turnover在你的CSV中是第11列（索引11）
-        ('stock_code', -1),  # 股票代码列（索引1），设为-1表示不解析（用不到）
+        ('stock_code', 1),  # 股票代码列（索引1），设为-1表示不解析（用不到）
         ('amount', -1),  # 成交额列（索引7），设为-1不解析
-        ('amplitude', -1),  # 振幅列（索引8），设为-1不解析
+        ('amplitude', 8),  # 振幅列（索引8），设为-1不解析
         # 其他默认字段的索引（必须和你的CSV列对应，覆盖父类默认值！）
         ('datetime', 0),  # date在0列
         ('open', 2),  # open在2列
@@ -215,22 +219,29 @@ class MACDOptStrategy(bt.Strategy):
         self.macd_diff = self.macd.macd  # MACD线
         self.macd_signal = self.macd.signal  # 信号线
         self.macd_hist = self.macd.histo  # 柱状图（macd线 - 信号线，券商标准）
+        self.mcross = bt.indicators.CrossOver(self.macd.macd, self.macd.signal)
 
         # 周线MACD同步修复（和日线保持一致，适配跨周期判断）
-        self.macd_week = bt.indicators.MACDHisto(
+        self.week_macd = bt.indicators.MACDHisto(
             self.data1,
             period_me1=self.p.macd1,
             period_me2=self.p.macd2,
             period_signal=self.p.macdsig,
             # movav=ema_broker  # 同样传入正确的自定义EMA
         )
+        self.week_macd_diff = self.week_macd.macd  # MACD线
+        self.week_macd_signal = self.week_macd.signal  # 信号线
+        self.week_macd_hist = self.week_macd.histo  # 柱状图（macd线 - 信号线，券商标准）
 
-        self.mcross = bt.indicators.CrossOver(self.macd.macd, self.macd.signal)
+        self.week_mcross = bt.indicators.CrossOver(self.week_macd.macd, self.week_macd.signal)
 
         self.atr = bt.indicators.ATR(self.data0, period=self.p.atrperiod)
         self.rsi6 = bt.indicators.RSI(self.data0, period=6)
         self.rsi12 = bt.indicators.RSI(self.data0, period=12)
         self.rsi24 = bt.indicators.RSI(self.data0, period=24)
+        self.week_rsi6 = bt.indicators.RSI(self.data1, period=6)
+        self.week_rsi12 = bt.indicators.RSI(self.data1, period=12)
+        self.week_rsi24 = bt.indicators.RSI(self.data1, period=24)
         self.volume_ema = bt.indicators.EMA(self.data.volume, period=10)
 
         # KDJ指标计算
@@ -249,6 +260,22 @@ class MACDOptStrategy(bt.Strategy):
 
         # KDJ金叉/死叉判断
         self.kdj_gold_cross = bt.indicators.CrossOver(self.k, self.d)
+
+        week_stoch = bt.indicators.KDJ(
+            self.data1,
+            period=self.p.kdj_period,
+            period_dfast=self.p.kdj_k_period,
+            period_dslow=self.p.kdj_d_period,
+            movav=bt.indicators.SMA,
+            upperband=80,
+            lowerband=20
+        )
+        self.week_k = week_stoch.percK
+        self.week_d = week_stoch.percD
+        self.week_j = 3 * self.k - 2 * self.d
+
+        # KDJ金叉/死叉判断
+        self.week_kdj_gold_cross = bt.indicators.CrossOver(self.week_k, self.week_d)
 
         # 布林线核心参数：周期20（默认）、2倍标准差（默认），基于收盘价计算
         self.boll = bt.indicators.BollingerBands(
@@ -293,10 +320,13 @@ class MACDOptStrategy(bt.Strategy):
         # ===================== 新增：分数拆解存储 - 关键！用于命令行打印具体分项 =====================
         self.daily_score_log = {}  # 键：日期字符串（YYYY-MM-DD），值：{buy_score:总得分, buy_details:分项字典, sell_score:总得分, sell_details:分项字典}
 
+        # ===================== 新增：连续3天分数历史存储 =====================
+        self.daily_scores_history = []  # 格式：[(date_str, buy_score), ...]，仅保留最近3天
+        self.TREND_BONUS_MAX = 1.0  # 趋势最大加分/减分
+
         # 买卖信号存储
         self.buy_signals = []
         self.sell_signals = []
-
 
         # 股票类型参数（适配tradescore）
         if self.p.stock_type == 'blue_chip':
@@ -308,7 +338,44 @@ class MACDOptStrategy(bt.Strategy):
         elif self.p.stock_type == 'cycle':
             self.p.stock_type = '小盘股'
 
+    # ===================== 新增：连续3天分数趋势判断函数 =====================
+    def _check_3day_score_trend(self):
+        """
+        检查连续3天的买入分数趋势，返回趋势类型和评分调整值
+        返回值：
+            trend_type: str - '递增'/'递减'/'震荡'/'不足3天'
+            trend_adjust: float - 趋势调整分（-1.0 ~ +1.0）
+        """
+        if len(self.daily_scores_history) < 3:
+            return '不足3天', 0.0
 
+        # 提取最近3天的分数（按时间顺序：第一天、第二天、第三天,day3是今天）
+        day1_date, day1_score = self.daily_scores_history[0]
+        day2_date, day2_score = self.daily_scores_history[1]
+        day3_date, day3_score = self.daily_scores_history[2]
+
+        # 判断趋势
+        if day3_score >= day2_score >= day1_score:
+            # 连续递增：加分
+            return '递增', (abs(day1_score + day2_score)) / 2
+
+        elif day3_score <= day2_score <= day1_score:
+            # 连续递减：减分
+            return '递减', -(abs(day1_score + day2_score)) / 2
+
+        else:
+            return '震荡', 0.0
+
+    # ===================== 新增：打印连续3天分数详情 =====================
+    def _print_3day_score_details(self):
+        """打印最近3天的分数详情（调试/日志用）"""
+        if len(self.daily_scores_history) < 3:
+            print(f"⚠️  连续3天分数数据不足（当前仅{len(self.daily_scores_history)}天）")
+            return
+
+        print("📊 连续3天分数趋势：")
+        for i, (date_str, score) in enumerate(self.daily_scores_history, 1):
+            print(f"   第{i}天({date_str}): {score:.2f}分")
 
     def get_current_indicators(self):
         """获取当前周期所有指标的数值，返回字典"""
@@ -331,10 +398,7 @@ class MACDOptStrategy(bt.Strategy):
             'ATR': round(self.atr[0], 4) if len(self.atr) > 0 else np.nan,
             # RSI
             'RSI6': round(self.rsi6[0], 2) if len(self.rsi6) > 0 else np.nan,
-            # KDJ
-            'KDJ_K': round(self.k[0], 2) if len(self.k) > 0 else np.nan,
-            'KDJ_D': round(self.d[0], 2) if len(self.d) > 0 else np.nan,
-            'KDJ_J': round(self.j[0], 2) if len(self.j) > 0 else np.nan,
+
             # 布林线
             '布林上轨': round(self.boll_upper[0], 2) if len(self.boll_upper) > 0 else np.nan,
             '布林中轨': round(self.boll_mid[0], 2) if len(self.boll_mid) > 0 else np.nan,
@@ -348,16 +412,24 @@ class MACDOptStrategy(bt.Strategy):
             # 趋势判断
             'MA200趋势': self.ma200_trend if hasattr(self, 'ma200_trend') else "未知",
             'MA200斜率': round(self.ma200_slope, 6) if hasattr(self, 'ma200_slope') else np.nan,
-            '价格是否在MA200上方': (self.data.close[0] > self.ma200[0]) if len(self.ma200) > 0 else False,
+            '价格在MA200上方': (self.data.close[0] > self.ma200[0]) if len(self.ma200) > 0 else False,
             # KDJ状态
-            'KDJ是否金叉': self.kdj_gold_cross[0] > 0 if len(self.kdj_gold_cross) > 0 else False,
-            'KDJ是否死叉': self.kdj_gold_cross[0] < 0 if len(self.kdj_gold_cross) > 0 else False,
-            'KDJ是否超买': self.k[0] > 80 if len(self.k) > 0 else False,
-            'KDJ是否超卖': self.k[0] < 20 if len(self.k) > 0 else False,
+            # KDJ
+            'KDJ_K': round(self.k[0], 2) if len(self.k) > 0 else np.nan,
+            'KDJ_D': round(self.d[0], 2) if len(self.d) > 0 else np.nan,
+            'KDJ_J': round(self.j[0], 2) if len(self.j) > 0 else np.nan,
+            '2日KDJ趋势': "下降" if (
+                    len(self.k) >= 2 and len(self.j) >= 2 and self.k[-1] > self.k[0] and self.j[-1] > self.j[
+                0]) else "上升" if (
+                    len(self.k) >= 2 and len(self.j) >= 2 and self.k[-1] < self.k[0] and self.j[-1] < self.j[
+                0]) else "震荡/数据不足",
+            'KDJ金叉死叉': (btfinplot.get_kdj_status(self)),
+            '周KDJ金叉死叉': (btfinplot.week_get_kdj_status(self)),
+            'KDJ超买': self.k[0] > 80 if len(self.k) > 0 else False,
+            'KDJ超卖': self.k[0] < 20 if len(self.k) > 0 else False,
             # MACD状态
-            'MACD是否金叉': self.mcross[0] > 0 if len(self.mcross) > 0 else False,
-            'MACD是否死叉': self.mcross[0] < 0 if len(self.mcross) > 0 else False,
-            'MACD是否在零轴上方': self.macd.macd[0] > 0 if len(self.macd.macd) > 0 else False,
+            'MACD状态': btfinplot.get_macd_status(self),
+            '周MACD状态': btfinplot.get_week_macd_status(self),
             # 新增手册指标
             '量比': round(self.volume_ratio[0], 2) if len(self.volume_ratio) > 0 else np.nan,
             '乖离率BIAS6(%)': round(self.bias6[0], 2) if len(self.bias6) > 0 else np.nan,
@@ -365,6 +437,8 @@ class MACDOptStrategy(bt.Strategy):
             '北向资金(万元)': self.north_capital,
             '获利盘比例(%)': self.profit_ratio,
             '套牢盘比例(%)': self.cover_ratio,
+            '跌破五日均价': self.data.close[0] < self.ma5[0],
+
         }
         return indicators
 
@@ -443,7 +517,7 @@ class MACDOptStrategy(bt.Strategy):
             buy_total_score = self.daily_score_log.get(buy_date_str, {}).get('buy_score', np.nan)
             sell_total_score = self.daily_score_log.get(sell_date_str, {}).get('buy_score', np.nan)
 
-            # 计算交易数量（使用买入时的数量）
+            # 计算交易数量（使用buy-的数量）
             trade_size = self.current_position_info['buy_size']
 
             # 如果记录的信息不完整，使用 trade 对象的备用信息
@@ -475,71 +549,91 @@ class MACDOptStrategy(bt.Strategy):
 
             # 生成交易日志（包含买卖下单时的指标值 + 总评分）
             self.trade_id += 1
+            # 生成交易日志（按8大指标分类排列，便于复盘分析）
+            # 生成交易日志（按8大指标核心判定条件排列，记录决策逻辑）
             trade_log = {
                 "交易编号": self.trade_id,
                 "开仓日期": buy_date.strftime('%Y-%m-%d') if buy_date else "未知",
                 "平仓日期": sell_date.strftime('%Y-%m-%d') if sell_date else "未知",
                 "持仓天数": trade_duration,
-                "盈亏(不含手续费)": round(trade_pnl, 2),
-                "幅度": f"{round((sell_price - buy_price) / buy_price * 100, 2)}%",
-                "买入价格": round(buy_price, 2),
-                "卖出价格": round(sell_price, 2),
-                # ========== 新增：总评分字段 ==========
-                "买入时总评分": round(buy_total_score, 2) if not np.isnan(buy_total_score) else "",
-                "卖出时总评分": round(sell_total_score, 2) if not np.isnan(sell_total_score) else "",
-                "盈亏(含手续费)": round(trade_pnlcomm, 2),
                 "盈亏类型": trade_result,
-                "交易数量": abs(trade_size),
-                "手续费": round(abs(trade.pnl - trade.pnlcomm), 2),
+                "盈亏(含手续费)": round(trade_pnlcomm, 2),
+                "涨幅": f"{round((sell_price - buy_price) / buy_price * 100, 2)}%",
 
-                # ===== 买入下单时的指标值 =====
-                "买入时MA5": buy_indicators.get('MA5', np.nan),
-                "买入时MA10": buy_indicators.get('MA10', np.nan),
-                "买入时MA20": buy_indicators.get('MA20', np.nan),
-                "买入时MA60": buy_indicators.get('MA60', np.nan),
-                "买入时MA200": buy_indicators.get('MA200', np.nan),
-                "买入时成交量(手)": buy_indicators.get('成交量(手)', np.nan),
-                "买入时均量线5": buy_indicators.get('均量线5', np.nan),
-                "买入时MACD值": buy_indicators.get('MACD值', np.nan),
-                "买入时MACD信号线": buy_indicators.get('MACD信号线', np.nan),
-                "买入时MACD柱状图": buy_indicators.get('MACD柱状图', np.nan),
-                "买入时ATR": buy_indicators.get('ATR', np.nan),
-                "买入时RSI6": buy_indicators.get('RSI6', np.nan),
-                "买入时KDJ_K": buy_indicators.get('KDJ_K', np.nan),
-                "买入时KDJ_D": buy_indicators.get('KDJ_D', np.nan),
-                "买入时KDJ_J": buy_indicators.get('KDJ_J', np.nan),
-                "买入时布林上轨": buy_indicators.get('布林上轨', np.nan),
-                "买入时布林中轨": buy_indicators.get('布林中轨', np.nan),
-                "买入时布林下轨": buy_indicators.get('布林下轨', np.nan),
-                "买入时布林偏离度(%)": buy_indicators.get('布林偏离度(%)', np.nan),
-                "买入时收盘价": buy_indicators.get('当前收盘价', np.nan),
-                "买入时MA200趋势": buy_indicators.get('MA200趋势', "未知"),
-                "买入时KDJ是否金叉": buy_indicators.get('KDJ是否金叉', False),
-                "买入时MACD是否金叉": buy_indicators.get('MACD是否金叉', False),
-                # ===== 卖出下单时的指标值 =====
-                "卖出时MA5": sell_indicators.get('MA5', np.nan),
-                "卖出时MA10": sell_indicators.get('MA10', np.nan),
-                "卖出时MA20": sell_indicators.get('MA20', np.nan),
-                "卖出时MA60": sell_indicators.get('MA60', np.nan),
-                "卖出时MA200": sell_indicators.get('MA200', np.nan),
-                "卖出时成交量(手)": sell_indicators.get('成交量(手)', np.nan),
-                "卖出时均量线5": sell_indicators.get('均量线5', np.nan),
-                "卖出时MACD值": sell_indicators.get('MACD值', np.nan),
-                "卖出时MACD信号线": sell_indicators.get('MACD信号线', np.nan),
-                "卖出时MACD柱状图": sell_indicators.get('MACD柱状图', np.nan),
-                "卖出时ATR": sell_indicators.get('ATR', np.nan),
-                "卖出时RSI6": sell_indicators.get('RSI6', np.nan),
-                "卖出时KDJ_K": sell_indicators.get('KDJ_K', np.nan),
-                "卖出时KDJ_D": sell_indicators.get('KDJ_D', np.nan),
-                "卖出时KDJ_J": sell_indicators.get('KDJ_J', np.nan),
-                "卖出时布林上轨": sell_indicators.get('布林上轨', np.nan),
-                "卖出时布林中轨": sell_indicators.get('布林中轨', np.nan),
-                "卖出时布林下轨": sell_indicators.get('布林下轨', np.nan),
-                "卖出时布林偏离度(%)": sell_indicators.get('布林偏离度(%)', np.nan),
-                "卖出时收盘价": sell_indicators.get('当前收盘价', np.nan),
-                "卖出时MA200趋势": sell_indicators.get('MA200趋势', "未知"),
-                "卖出时KDJ是否死叉": sell_indicators.get('KDJ是否死叉', False),
-                "卖出时MACD是否死叉": sell_indicators.get('MACD是否死叉', False)
+                # ===================== 1. 【MACD】判定逻辑 =====================
+                # 核心逻辑：零轴位置 + 柱状图状态 + 背离
+                "【1.MACD(买)】zero_position": f"{buy_indicators['MACD状态']['zero_position']}",
+                "【1.MACD(买)】cross_status": f"{buy_indicators['MACD状态']['cross_status']}",
+                "【1.MACD(买)】last_gold_day": f"{buy_indicators['MACD状态']['last_gold_day']}",
+                "【1.MACD(买)】last_dead_day": f"{buy_indicators['MACD状态']['last_dead_day']}",
+                "【1.MACD(卖)】zero_position": f"{sell_indicators['MACD状态']['zero_position']}",
+                "【1.MACD(卖)】cross_status": f"{sell_indicators['MACD状态']['cross_status']}",
+                "【1.MACD(卖)】last_gold_day": f"{sell_indicators['MACD状态']['last_gold_day']}",
+                "【1.MACD(卖)】last_dead_day": f"{sell_indicators['MACD状态']['last_dead_day']}",
+
+                "【1.周MACD(买)】zero_position": f"{buy_indicators['周MACD状态']['zero_position']}",
+                "【1.周MACD(买)】cross_status": f"{buy_indicators['周MACD状态']['cross_status']}",
+                "【1.周MACD(买)】last_gold_day": f"{buy_indicators['周MACD状态']['last_gold_day']}",
+                "【1.周MACD(买)】last_dead_day": f"{buy_indicators['周MACD状态']['last_dead_day']}",
+                "【1.周MACD(卖)】zero_position": f"{sell_indicators['MACD状态']['zero_position']}",
+                "【1.周MACD(卖)】cross_status": f"{sell_indicators['周MACD状态']['cross_status']}",
+                "【1.周MACD(卖)】last_gold_day": f"{sell_indicators['周MACD状态']['last_gold_day']}",
+                "【1.周MACD(卖)】last_dead_day": f"{sell_indicators['周MACD状态']['last_dead_day']}",
+
+
+
+                # ===================== 2. 【KDJ】判定逻辑 =====================
+                # 核心逻辑：极值区(J>90/J<10) + 金死叉 + 趋势位置
+                "【2.KDJ】J值位置(买/卖)": f"{'极端超卖(J<' + str(buy_indicators.get('KDJ_J', 0)) + ')' if buy_indicators.get('KDJ_J', 0) < 10 else '超卖区' if buy_indicators.get('KDJ_J', 0) < 20 else '震荡/高位'} / {'极端超买(J>' + str(sell_indicators.get('KDJ_J', 0)) + ')' if sell_indicators.get('KDJ_J', 0) > 90 else '超买区' if sell_indicators.get('KDJ_J', 0) > 80 else '震荡/低位'}",
+                "【2.KDJ(买)】日线金死叉": f"{buy_indicators.get('KDJ金叉死叉')}",
+                "【2.KDJ(卖)】日线金死叉": f"{sell_indicators.get('KDJ金叉死叉')}",
+                "【2.KDJ(买)】周线金死叉": f"{buy_indicators.get('周KDJ金叉死叉')}",
+                "【2.KDJ(卖)】周线金死叉": f"{sell_indicators.get('周KDJ金叉死叉')}",
+                "【2.KDJ】连续极值(买/卖)": f"{'连续超卖' if buy_indicators.get('KDJ_J', 0) < 20 and buy_indicators.get('KDJ_J_prev1', 0) < 20 else '无'} / {'连续超买' if sell_indicators.get('KDJ_J', 0) > 80 and sell_indicators.get('KDJ_J_prev1', 0) > 80 else '无'}",
+
+                # ===================== 3. 【RSI】判定逻辑 =====================
+                # 核心逻辑：超买超卖线(20/80) + 背离/金叉
+                "【3.RSI】数值区间(买/卖)": f"{'极端超卖(<20)' if buy_indicators.get('RSI6', 0) < 20 else '超卖(20-30)' if buy_indicators.get('RSI6', 0) < 30 else '常态'} / {'极端超买(>80)' if sell_indicators.get('RSI6', 0) > 80 else '超买(70-80)' if sell_indicators.get('RSI6', 0) > 70 else '常态'}",
+                "【3.RSI】突破信号(买/卖)": f"{'突破50线金叉' if buy_indicators.get('RSI6', 0) > 50 and buy_indicators.get('RSI6_prev', 0) < 50 else '普通金叉'} / {'跌破50线死叉' if sell_indicators.get('RSI6', 0) < 50 and sell_indicators.get('RSI6_prev', 0) > 50 else '普通死叉'}",
+
+                # ===================== 4. 【BIAS】判定逻辑 =====================
+                # 核心逻辑：极端阈值(大盘<-5%等) + 背离
+                "【4.BIAS】6日数值(买/卖)": f"{buy_indicators.get('乖离率BIAS6(%)', 0):.2f}% / {sell_indicators.get('乖离率BIAS6(%)', 0):.2f}%",
+                "【4.BIAS】状态(买/卖)": f"{'极端超卖/共振' if buy_indicators.get('乖离率BIAS6(%)', 0) < -5 else '回归平衡区'} / {'极端超买/共振' if sell_indicators.get('乖离率BIAS6(%)', 0) > 5 else '回归平衡区'}",
+                "【4.BIAS】背离(买/卖)": f"{'BIAS底背离' if buy_indicators.get('BIAS底背离') else '无'} / {'BIAS顶背离' if sell_indicators.get('BIAS顶背离') else '无'}",
+
+                # ===================== 5. 【BOLL】判定逻辑 =====================
+                # 核心逻辑：触及轨线 + 中轨趋势
+                "【5.BOLL】价格位置(买/卖)": f"{'触及下轨' if buy_indicators.get('布林偏离度(%)', 0) < 5 else '中轨下方'} / {'触及上轨' if sell_indicators.get('布林偏离度(%)', 0) > 95 else '中轨上方'}",
+                "【5.BOLL】中轨趋势(买/卖)": f"{'中轨向上' if buy_indicators.get('布林中轨', 0) > buy_indicators.get('布林中轨_prev', 0) else '中轨向下'} / {'中轨向下' if sell_indicators.get('布林中轨', 0) < sell_indicators.get('布林中轨_prev', 0) else '中轨向上'}",
+                "【5.BOLL】背离(买/卖)": f"{'BOLL底背离' if buy_indicators.get('BOLL底背离') else '无'} / {'BOLL顶背离' if sell_indicators.get('BOLL顶背离') else '无'}",
+
+                # ===================== 6. 【均线】判定逻辑 =====================
+                # 核心逻辑：多空排列 + 价格相对位置
+                "【6.均线】排列(买/卖)": f"{'多头排列' if buy_indicators.get('MA5', 0) > buy_indicators.get('MA10', 0) else '空头排列'} / {'空头排列' if sell_indicators.get('MA5', 0) < sell_indicators.get('MA10', 0) else '多头排列'}",
+                "【6.均线】价格位置(买/卖)": f"{'站稳MA60' if buy_indicators.get('价格在MA200上方') else 'MA60下方'} / {'跌破MA60' if sell_indicators.get('价格在MA200上方') == False else 'MA60上方'}",
+                "【6.均线】背离(买/卖)": f"{'均线底背离' if buy_indicators.get('MA底背离') else '无'} / {'均线顶背离' if sell_indicators.get('MA顶背离') else '无'}",
+
+                # ===================== 7. 【成交量】判定逻辑 =====================
+                # 核心逻辑：量价配合 + 极值(地量/天量)
+                "【7.成交量】量价关系(买/卖)": f"{'价涨量增' if buy_indicators.get('成交量(手)', 0) > buy_indicators.get('均量线5', 0) else '缩量整理'} / {'价跌量增' if sell_indicators.get('成交量(手)', 0) > sell_indicators.get('均量线5', 0) else '缩量阴跌'}",
+                "【7.成交量】极值状态(买/卖)": f"{'地量筑底' if buy_indicators.get('成交量(手)', 0) < buy_indicators.get('均量线5', 0) * 0.5 else '放量突破'} / {'天量见顶' if sell_indicators.get('成交量(手)', 0) > sell_indicators.get('均量线5', 0) * 1.5 else '温和放量'}",
+
+                # ===================== 8. 【换手率】判定逻辑 =====================
+                # 核心逻辑：换手区间(低/健康/高) + 股票类型适配
+                "【8.换手率】数值(买/卖)": f"{buy_indicators.get('换手率(%)', 0):.2f}% / {sell_indicators.get('换手率(%)', 0):.2f}%",
+                "【8.换手率】状态(买/卖)": f"{'低位惜售' if buy_indicators.get('换手率(%)', 0) < 2 else '活跃换手'} / {'高位放量' if sell_indicators.get('换手率(%)', 0) > 10 else '温和'}",
+                "【8.换手率】类型适配(买/卖)": f"{self.p.stock_type}(买) / {self.p.stock_type}(卖)",
+
+                # ===================== 9. 【综合位置修正】 =====================
+                # 核心逻辑：这是评分手册中决定分数翻倍/减半的关键
+                "【9.位置修正】股价阶段(买/卖)": f"{'低位(MA60下)' if buy_price < buy_indicators.get('MA60', 0) else '中位/高位'} / {'高位(创阶段新高)' if sell_price > max(buy_indicators.get('MA60', 0), sell_indicators.get('MA60', 0)) else '中位/低位'}",
+
+                # ===================== 新增：连续3天分数趋势 =====================
+                "【10.连续3天分数】买入日趋势": self.daily_scores_history[-1][1] if len(
+                    self.daily_scores_history) > 0 else np.nan,
+                "【10.连续3天分数】趋势类型": self._check_3day_score_trend()[0],
+                "【10.连续3天分数】趋势调整分": self._check_3day_score_trend()[1],
             }
 
             # 添加到日志列表并打印
@@ -681,40 +775,62 @@ class MACDOptStrategy(bt.Strategy):
             'sell_details': details
         }
 
+        # ===================== 新增：更新连续3天分数历史 =====================
+        current_score_entry = (current_date, total_score)
+        self.daily_scores_history.append(current_score_entry)
+        # 只保留最近3天的分数
+        if len(self.daily_scores_history) > 3:
+            self.daily_scores_history.pop(0)
+
+        # ===================== 新增：获取连续3天趋势调整分 =====================
+        trend_type, trend_adjust = self._check_3day_score_trend()
+        # 最终决策分数 = 当日分数 + 趋势调整分
+        final_decision_score = total_score
+
         if self.order:
             return
 
-        # ========== 核心修正2：严格遵循手册的交易决策阈值 ==========
+        # ========== 核心修正2：严格遵循手册的交易决策阈值（使用最终决策分） ==========
         if not self.position:  # 无仓位
             # 强力买入/重仓（≥12分）
-            if total_score >= btfinplot.DECISION_THRESHOLDS['强力买入']:
-                # 记录买入时的指标值
+            if final_decision_score >= btfinplot.DECISION_THRESHOLDS['强力买入']:
                 buy_indicators = self.get_current_indicators()
                 self.order_indicator_info['buy'] = buy_indicators
                 self.order = self.buy(exectype=bt.Order.Market)
+                # 关键：用价格绝对值计算止损价
                 pdist = self.atr[0] * self.p.atrdist
-                self.pstop = self.data0.close[0] - pdist
-                print(f"【强力买入】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+                self.pstop = abs(self.data0.close[0]) - pdist  # 取绝对值
+                # 确保止损价为正
+                self.pstop = max(self.pstop, 0.01)
+                print(
+                    f"【强力买入】日期：{current_date} | 当日评分：{total_score:.2f} | 趋势({trend_type})调整：{trend_adjust:.2f} | 最终评分：{final_decision_score:.2f} | 决策：{decision} | 细节: {details}")
+                self._print_3day_score_details()  # 打印3天分数详情
             # 积极买入/加仓（8~11.9分）
-            elif btfinplot.DECISION_THRESHOLDS['积极买入'] <= total_score < btfinplot.DECISION_THRESHOLDS['强力买入']:
+            elif btfinplot.DECISION_THRESHOLDS['积极买入'] <= final_decision_score < btfinplot.DECISION_THRESHOLDS[
+                '强力买入']:
                 buy_indicators = self.get_current_indicators()
                 self.order_indicator_info['buy'] = buy_indicators
                 self.order = self.buy(exectype=bt.Order.Market)
                 pdist = self.atr[0] * self.p.atrdist
                 self.pstop = self.data0.close[0] - pdist
-                print(f"【积极买入】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+                print(
+                    f"【积极买入】日期：{current_date} | 当日评分：{total_score:.2f} | 趋势({trend_type})调整：{trend_adjust:.2f} | 最终评分：{final_decision_score:.2f} | 决策：{decision} | 细节: {details}")
+                self._print_3day_score_details()
             # 谨慎买入/低吸（4~7.9分）
             # elif btfinplot.DECISION_THRESHOLDS['谨慎买入'] <= total_score < btfinplot.DECISION_THRESHOLDS['积极买入']:
-            elif 6 <= total_score < btfinplot.DECISION_THRESHOLDS['积极买入']:
+            elif 6 <= final_decision_score < btfinplot.DECISION_THRESHOLDS['积极买入']:
                 buy_indicators = self.get_current_indicators()
                 self.order_indicator_info['buy'] = buy_indicators
                 self.order = self.buy(exectype=bt.Order.Market)
                 pdist = self.atr[0] * self.p.atrdist
                 self.pstop = self.data0.close[0] - pdist
-                print(f"【谨慎买入】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+                print(
+                    f"【谨慎买入】日期：{current_date} | 当日评分：{total_score:.2f} | 趋势({trend_type})调整：{trend_adjust:.2f} | 最终评分：{final_decision_score:.2f} | 决策：{decision} | 细节: {details}")
+                self._print_3day_score_details()
             # 观望区间（-3.9~3.9分）
             else:
-                # print(f"【观望】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision}")
+                # 可选：打印趋势信息（非必须）
+                # print(f"【观望】日期：{current_date} | 当日评分：{total_score:.2f} | 趋势({trend_type})调整：{trend_adjust:.2f} | 最终评分：{final_decision_score:.2f} | 决策：{decision} | 细节: {details}")
                 pass
 
         else:  # 有仓位
@@ -722,23 +838,28 @@ class MACDOptStrategy(bt.Strategy):
             pstop = self.pstop
 
             # 强力卖出/空仓（≤-12分）
-            if total_score <= btfinplot.DECISION_THRESHOLDS['强力卖出']:
+            if final_decision_score <= btfinplot.DECISION_THRESHOLDS['强力卖出']:
                 sell_indicators = self.get_current_indicators()
                 self.order_indicator_info['sell'] = sell_indicators
                 self.order = self.close(exectype=bt.Order.Market)
-                print(f"【强力卖出】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+                print(
+                    f"【强力卖出】日期：{current_date} | 当日评分：{total_score:.2f} | 趋势({trend_type})调整：{trend_adjust:.2f} | 最终评分：{final_decision_score:.2f} | 决策：{decision} | 细节: {details}")
+                self._print_3day_score_details()  # 打印3天分数详情
             # 谨慎卖出/减仓（-8~-4分）
-            elif btfinplot.DECISION_THRESHOLDS['强力卖出'] < total_score <= btfinplot.DECISION_THRESHOLDS['谨慎卖出']:
+            elif btfinplot.DECISION_THRESHOLDS['强力卖出'] < final_decision_score <= btfinplot.DECISION_THRESHOLDS[
+                '谨慎卖出']:
                 sell_indicators = self.get_current_indicators()
                 self.order_indicator_info['sell'] = sell_indicators
                 self.order = self.close(exectype=bt.Order.Market)
-                print(f"【谨慎卖出】日期：{current_date} | 总评分：{total_score:.2f} | 决策：{decision} | 细节: {details}")
+                print(
+                    f"【谨慎卖出】日期：{current_date} | 当日评分：{total_score:.2f} | 趋势({trend_type})调整：{trend_adjust:.2f} | 最终评分：{final_decision_score:.2f} | 决策：{decision} | 细节: {details}")
+                self._print_3day_score_details()
             # 观望区间（-3.9~3.9分），执行移动止损
             else:
                 # 移动止损（保留原有逻辑）
                 pdist = self.atr[0] * self.p.atrdist
                 self.pstop = max(pstop, pclose - pdist)
-                # print(f"【持仓观望】日期：{current_date} | 总评分：{total_score:.2f} | 止损价：{self.pstop:.2f}")
+                # print(f"【持仓观望】日期：{current_date} | 当日评分：{total_score:.2f} | 趋势({trend_type})调整：{trend_adjust:.2f} | 最终评分：{final_decision_score:.2f} | 止损价：{self.pstop:.2f} | 细节: {details}")
 
     def stop(self):
         # ========== 原有逻辑：保存回测结果 + 交易日志 完全未动 ==========
@@ -779,7 +900,7 @@ class MACDOptStrategy(bt.Strategy):
             df_trade_log = pd.DataFrame(self.trade_logs)
             df_trade_log = df_trade_log.fillna("")
             df_trade_log.to_csv(TRADE_LOG_FILE, index=False, encoding='utf-8-sig')
-            print(f"\n✅ 每笔交易盈亏日志（含指标）已保存到: {TRADE_LOG_FILE}")
+            print(f"\n✅ 每笔交易盈亏日志（含连续3天分数趋势）已保存到: {TRADE_LOG_FILE}")
         else:
             print("\n⚠️ 本次回测无交易记录")
 
@@ -790,8 +911,7 @@ DATASETS = {
     'nvda': '../../datas/nvda-1999-2014.txt',
 }
 
-
-# ===================== 新增：打印指定日期分数核心函数 =====================
+# ===================== 新增：打印指定日期分数核心函数（新增连续3天展示） =====================
 def print_target_date_score(strat, target_date):
     """
     打印指定日期的buy_score、sell_score及各分项具体分数
@@ -1032,7 +1152,7 @@ def runstrat(args=None):
     print(f"📊 正在从文件读取数据用于绘图: {csv_file_path}")
 
     # 读取CSV，假设你的CSV包含 'date', 'open', 'high', 'low', 'close', 'volume' 列
-    df_plot = pd.read_csv(csv_file_path, usecols=['date', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
+    df_plot = pd.read_csv(csv_file_path, usecols=['date', '股票代码', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
 
     # === 关键修正：确保 date 列是 datetime 类型，然后创建 date_str 和 time 索引 ===
     df_plot['date'] = pd.to_datetime(df_plot['date'])  # 先转为 datetime
@@ -1041,21 +1161,81 @@ def runstrat(args=None):
     df_plot.set_index('time', inplace=True)
     df_plot.drop(columns=['date'], inplace=True)  # 删除原始的 datetime 列
     # ========================================================================
+    # ===================== 最终修复版：提取股票代码（兼容所有类型） =====================
+    stock_code = "未知股票"
+    if '股票代码' in df_plot.columns:
+        # 过滤空值/空白字符串（先统一转为字符串）
+        # 步骤1：将整列转为字符串，避免numpy.int64/numpy.float64类型
+        df_plot['股票代码'] = df_plot['股票代码'].astype(str)
+        # 步骤2：过滤空值、空白字符串、nan字符串
+        valid_codes = df_plot['股票代码'].replace(['', 'nan', 'NaN', 'None'], np.nan).dropna()
 
+        if not valid_codes.empty:
+            # 步骤3：取第一个值，转为字符串后去空格
+            stock_code = str(valid_codes.iloc[0]).strip()
+            # 步骤4：处理浮点数字符串（如600519.0 → 600519）
+            if '.' in stock_code:
+                stock_code = stock_code.split('.')[0]
+            # 步骤5：补全6位前置零（A股代码固定6位）
+            if stock_code.isdigit():
+                stock_code = stock_code.zfill(6)
+
+    print(f"✅ 从 df_plot 提取到股票代码：{stock_code}")
     # --- 准备交易信号（这部分还是需要从 strat 获取）---
+    # ===================== 【替换这部分绘图代码】 =====================
+
+    # 1. 准备绘图数据 (df_plot 你已经处理好了，这里确保有 date_str)
+    # ... (你之前的 df_plot 处理代码保留) ...
+    # 确保 df_plot 有 date_str 列 (如果没有就加上)
+    if 'date_str' not in df_plot.columns:
+        # 假设索引是时间戳，或者有 date 列
+        # 这里根据你实际情况调整，确保能生成 YYYY-MM-DD 格式的字符串列
+        pass
+
+    # 2. 准备交易信号
     all_signals = []
     for date_str, _ in strat.buy_signals:
         all_signals.append({'date': date_str, 'type': 'buy'})
     for date_str, _ in strat.sell_signals:
         all_signals.append({'date': date_str, 'type': 'sell'})
 
-    # --- 调用绘图 ---
+    # 3. 计算周线数据
+    df_weekly = btfinplot.resample_to_weekly(df_plot)
+
+    print("正在创建图表窗口...")
+
+    # 4. 创建周线图 (不立即显示)
+    btfinplot.plot_a_stock_analysis(
+        df=df_weekly,
+        symbol=stock_code,
+        title_suffix='周线图',
+        signals=all_signals,
+        is_weekly=True,
+        show_immediately=False  # 【关键】False，先不显示
+    )
+
+    # 5. 创建日线图 (不立即显示)
     btfinplot.plot_a_stock_analysis(
         df=df_plot,
-        symbol='002738',
-        title_suffix='Backtrader 回测结果',
+        symbol=stock_code,
+        title_suffix='日线图',
         signals=all_signals,
+        is_weekly=False,
+        show_immediately=False  # 【关键】False，先不显示
     )
+
+    print("两个窗口已创建，正在显示...")
+    print("📈 关闭所有图表窗口后程序将自动退出。")
+
+    # 6. 【终极关键】使用 finplot 原生的 show()
+    # 这会显示上面创建的所有窗口，并阻塞程序直到所有窗口都关闭
+    btfinplot.fplt.show()
+
+    print("所有窗口已关闭，程序结束。")
+
+    # 这里不需要再调用 qt_app.exec_() 了，fplt.show() 已经处理完了
+    # ===================================================================
+    # ===================================================================
     # ==================== 【新增：调试信息】 ====================
     # print("\n🔍 调试信息:")
     # print(f"df_plot 的 date_str 列前5行:\n{df_plot['date_str'].head()}")

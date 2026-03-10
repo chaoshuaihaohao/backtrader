@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
 # btfinplot.py
+# !/usr/bin/env python3
 
 from collections import defaultdict
 import dateutil.parser
@@ -10,9 +10,26 @@ import requests
 import os
 # 新增：导入pyqtgraph用于创建独立图例
 import pyqtgraph as pg
+from PyQt5.QtWidgets import QWidget, QGridLayout, QComboBox, QCheckBox, QApplication  # 补全导入
+from PyQt5.QtCore import Qt, QTimer  # 新增 QTimer 用于异步创建窗口
+import sys  # 新增：管理Qt应用程序
 
 baseurl = 'https://www.bitmex.com/api'
 fplt.timestamp_format = '%m/%d/%Y %H:%M:%S.%f'
+
+# ========== 消除QT DPI警告的核心配置 ==========
+# 在创建QApplication之前设置环境变量（优先方案）
+os.environ.pop('QT_DEVICE_PIXEL_RATIO', None)
+os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
+os.environ['QT_SCREEN_SCALE_FACTORS'] = ''
+os.environ['QT_SCALE_FACTOR'] = '1'
+
+# ========== 简化的Qt属性设置（不启动事件循环） ==========
+def init_qt_attributes():
+    """在创建QApplication之前设置DPI属性"""
+    # 必须在QCoreApplication实例化之前设置这些属性
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
 
 # ========== 新增：独立图例容器API ==========
@@ -148,6 +165,43 @@ def download_price_history(symbol='XBTUSD', start_time='2023-01-01', end_time='2
     return df.set_index('time')[['open', 'close', 'high', 'low', 'volume', 'turnover']]
 
 
+# ========== 新增：周期重采样函数 ==========
+def resample_to_weekly(df_daily):
+    """
+    将日线数据重采样为周线数据（周一开盘，周五收盘）
+    :param df_daily: 日线DataFrame，索引为时间戳（秒），包含open/close/high/low/volume/turnover
+    :return: 周线DataFrame
+    """
+    # 转换索引为datetime
+    df = df_daily.copy()
+    df.index = pd.to_datetime(df.index, unit='s')
+
+    # 周线重采样规则：
+    # - open: 每周第一个值
+    # - high: 每周最大值
+    # - low: 每周最小值
+    # - close: 每周最后一个值
+    # - volume: 每周求和
+    # - turnover: 每周平均值
+    weekly_df = df.resample('W-FRI').agg({
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'volume': 'sum',
+        'turnover': 'mean'
+    }).dropna()
+
+    # 转换回时间戳索引（秒）
+    weekly_df.index = weekly_df.index.astype('int64') // 10 ** 9
+    weekly_df.index.name = 'time'
+
+    # 添加date_str列（用于信号绘制）
+    weekly_df['date_str'] = pd.to_datetime(weekly_df.index, unit='s').strftime('%Y-%m-%d')
+
+    return weekly_df
+
+
 def plot_accumulation_distribution(df, ax):
     mfm_numerator = 2 * df['close'] - df['high'] - df['low']
     mfm_denominator = df['high'] - df['low']
@@ -251,6 +305,10 @@ def plot_heikin_ashi_volume(df, ax):
     df[['h_open', 'h_close', 'volume']].plot(ax=ax, kind='volume')
 
 
+def plot_volume(df, ax):
+    df[['open', 'close', 'volume']].plot(ax=ax, kind='volume')
+
+
 def plot_on_balance_volume(df, ax):
     obv = pd.Series(index=df.index, dtype='float64')
     obv.iloc[0] = df['volume'].iloc[0]  # 第一天 OBV = 成交量
@@ -342,7 +400,6 @@ def plot_macd(df, ax):
     fplt.plot(df['signal_line'], ax=ax, legend='Signal', color='red')
 
 
-
 def plot_vma(df, ax):
     df.volume.rolling(20).mean().plot(ax=ax, legend='VOL20', color='#c0c030')
 
@@ -380,14 +437,14 @@ def plot_kdj(df, ax):
             100.0 * (df['close'] - df['n_low']) / (df['n_high'] - df['n_low'])
         )
 
-        # Step2：计算K/D - 券商版核心递推逻辑（2/3前值 + 1/3当前RSV），初始化K/D=50
+        # Step2：计算K/D - 券商版核心递推逻辑（2/3前值 + 1/3当前值），初始化K/D=50
         df['kdj_k'] = 50.0  # 第一根K线初始化K=50
         df['kdj_d'] = 50.0  # 第一根K线初始化D=50
         for i in range(1, len(df)):
-            # K线递推：2/3*前一根K + 1/3*当前RSV
+            # K线递推：2/3 * 前一根K + 1/3 * 当前RSV
             df.loc[df.index[i], 'kdj_k'] = (2 / 3) * df.loc[df.index[i - 1], 'kdj_k'] + (1 / 3) * df.loc[
                 df.index[i], 'rsv']
-            # D线递推：2/3*前一根D + 1/3*当前K
+            # D线递推：2/3 * 前一根D + 1/3 * 当前K
             df.loc[df.index[i], 'kdj_d'] = (2 / 3) * df.loc[df.index[i - 1], 'kdj_d'] + (1 / 3) * df.loc[
                 df.index[i], 'kdj_k']
 
@@ -419,141 +476,6 @@ def plot_kdj(df, ax):
     # 5. 可选：添加超买/超卖区域（半透明）
     fplt.add_horizontal_band(20, 80, ax=ax)
 
-
-def plot_a_stock_analysis(
-        df,
-        symbol='A股',
-        title_suffix='',
-        signals=None,
-        hover_callback=None,  # 新增参数
-        crosshair_callback=None  # 新增参数
-):
-    """
-    绘制完整的A股多指标分析图（新增RSI+KDJ+MACD动态数值显示）。
-
-    参数:
-        df (pd.DataFrame): 必须包含列 ['open', 'high', 'low', 'close', 'volume']，且索引为时间戳（秒）。
-                           还需包含 'date_str' 列（格式 '%Y-%m-%d'），用于信号绘制。
-        symbol (str): 股票代码，用于标题和悬停提示。
-        title_suffix (str): 标题后缀，可选。
-        signals (list): 交易信号列表，例如：
-                        - [{'date': '2023-05-10', 'type': 'buy'}, {'date': '2023-06-15', 'type': 'sell'}]
-                        - 或 [('2023-05-10', 'buy'), ('2023-06-15', 'sell')]
-        hover_callback (callable): 自定义悬停回调，签名为 func(x, y, df, symbol, interval, hover_label, rsi_hover_label, kdj_hover_label, macd_hover_label, ax, ax3, ax4, ax2)
-        crosshair_callback (callable): 自定义十字线回调，签名为 func(x, y, xtext, ytext, df)
-    """
-    interval = 'd'  # 日线（必须定义！）
-
-    # change to b/w coloring templates for next plots
-    fplt.candle_bull_color = fplt.volume_bull_color = 'red'  # K线/成交量阳线边框颜色
-    fplt.candle_bull_body_color = fplt.volume_bull_body_color = 'white'  # K线/成交量阳线实体颜色
-    fplt.candle_bear_color = fplt.candle_bear_body_color = 'green'
-    fplt.volume_bear_color = fplt.volume_bear_body_color = 'green'
-    fplt.legend_text_color = 'black'
-    fplt.legend_background_color = 'gray'
-
-    full_title = f'A股 {symbol} 平均K线图'
-    if title_suffix:
-        full_title += f' - {title_suffix}'
-    ax, ax1, ax2, ax3, ax4, ax5, ax6, ax7 = fplt.create_plot(full_title, rows=8)
-    # 不显示第一个ax的网格线
-    ax.set_visible(xgrid=False, ygrid=False)
-
-    # ========== 核心修改：创建独立的MA图例容器 ==========
-    create_legend(
-        ax=ax,
-        name="ma_legend",
-        pos="top_left",
-        size=(120, 50),
-        bg_color=fplt.legend_background_color,
-        text_color=fplt.legend_text_color
-    )
-
-    # ========== 主函数中：创建所有悬停标签 ==========
-    # 主图K线悬停标签
-    hover_label = fplt.add_legend('', ax=ax)
-    hover_label.setPos(800, 20)
-    hover_label.setZValue(1000)
-
-    # RSI子图悬停标签
-    rsi_hover_label = fplt.add_legend('', ax=ax3)
-    rsi_hover_label.setPos(ax3.boundingRect().width() - 200, 20)
-    rsi_hover_label.setZValue(1000)
-
-    # KDJ子图悬停标签
-    kdj_hover_label = fplt.add_legend('', ax=ax4)
-    kdj_hover_label.setPos(ax4.boundingRect().width() - 200, 20)
-    kdj_hover_label.setZValue(1000)
-
-    # MACD子图悬停标签
-    macd_hover_label = fplt.add_legend('', ax=ax2)
-    macd_hover_label.setPos(ax2.boundingRect().width() - 200, 20)
-    macd_hover_label.setZValue(1000)
-
-    # ========== 新增：成交量子图悬停标签 ==========
-    vol_hover_label = fplt.add_legend('', ax=ax1)
-    vol_hover_label.setPos(ax1.boundingRect().width() - 200, 20)
-    vol_hover_label.setZValue(1000)
-
-    # ========== 新增：布林带(副图ax5)悬停标签 ==========
-    boll_hover_label = fplt.add_legend('', ax=ax5)
-    boll_hover_label.setPos(ax5.boundingRect().width() - 250, 20)
-    boll_hover_label.setZValue(1000)
-
-    ####### 图层顺序 #######
-    # 1.  K线图 (主图)
-    # 2.  成交量 (Volume) 及其均量线
-    # 3.  MACD (趋势与动能)
-    # 4.  RSI (超买超卖)
-    # 5.  KDJ (短线买卖信号)
-    # 6.  OBV (能量潮，资金流)
-    # 7.  布林带 (Bollinger Bands) 或 EMA (短期趋势)
-    # price chart
-
-    plot_candlestick(df, ax=ax)
-    plot_ma(df, ax)
-
-    plot_heikin_ashi(df, ax5)
-
-    # 注意：必须确保 plot_bollinger_bands 在 plot_ema 之前调用
-    # 或者确保 plot_bollinger_bands 内部计算了 df['boll_mid'] 等列
-    plot_bollinger_bands(df, ax5)
-    plot_ema(df, ax5)
-
-    # volume chart
-    plot_heikin_ashi_volume(df, ax1)
-    plot_vma(df, ax=ax1)
-
-    plot_macd(df, ax2)  # MACD计算后会自动给df添加macd_diff列
-    plot_rsi(df, ax3)
-    plot_kdj(df, ax4)  # KDJ计算后会自动给df添加kdj_k/kdj_d/kdj_j列
-
-    # some more charts
-    plot_accumulation_distribution(df, ax7)
-    plot_on_balance_volume(df, ax6)
-
-    # ========== 【关键新增】添加交易信号 ==========
-    if signals is not None:
-        append_trade_signals(df_plot=df, ax=ax, signals=signals)
-
-    # ========== 设置回调 ==========
-    final_hover_cb = hover_callback or default_hover_callback
-    final_crosshair_cb = crosshair_callback or default_crosshair_callback
-
-    # 包装回调函数，注意这里增加了 vol_hover_label 和 ax1
-    def wrapped_hover(x, y):
-        return final_hover_cb(x, y, df, symbol, interval, hover_label, rsi_hover_label, kdj_hover_label,
-                              macd_hover_label, vol_hover_label, boll_hover_label, ax, ax3, ax4, ax2, ax1, ax5)
-
-    def wrapped_crosshair(x, y, xtext, ytext):
-        return final_crosshair_cb(x, y, xtext, ytext, df)
-
-    # 绑定鼠标回调到主图 ax，这样移动鼠标时所有子图数据都能更新
-    fplt.set_mouse_callback(wrapped_hover, ax=ax, when='hover')
-    fplt.add_crosshair_info(wrapped_crosshair, ax=ax)
-
-    fplt.autoviewrestore()
-    fplt.show()
 
 def draw_trade_signals(df_plot, ax, buy_signals=None, sell_signals=None):
     """绘制买卖信号 - 兼容周/月线，动态偏移"""
@@ -709,7 +631,7 @@ def default_hover_callback(x, y, df, symbol, interval, hover_label, rsi_hover_la
     for col in ['kdj_k', 'kdj_d', 'kdj_j']:
         if col in df.columns and pd.notna(row[col]):
             kdj_val = row[col]
-            # 根据KDJ值设置颜色（超买>80红，超卖<20绿，正常黑）
+            # 根据KDJ值设置颜色（超买红，超卖绿，正常黑）
             if kdj_val > 80:
                 kdj_color = 'red'
             elif kdj_val < 20:
@@ -749,23 +671,20 @@ def default_hover_callback(x, y, df, symbol, interval, hover_label, rsi_hover_la
     # ========== 5. 新增：更新成交量数值信息 ==========
     vol_parts = []
     current_vol = row['volume']
-
     # 格式化当前成交量（假设单位是手，转换为万手显示）
     vol_parts.append(f'VOL: <span style="color:blue">{current_vol / 10000:.0f}万</span>')
 
-    # 计算并格式化 VOL5 (5日均量线)
-    # 注意：这里使用iloc确保索引正确，取前5天包括今天
+    # 计算并格式化VOL5 (5日均量线)
     if len(df.loc[:ts_sec]) >= 5:
         vol5 = df['volume'].loc[:ts_sec].iloc[-5:].mean()
         vol_parts.append(f'VOL5: <span style="color:orange">{vol5 / 10000:.0f}万</span>')
 
-    # 计算并格式化 VOL10 (10日均量线)
+    # 计算并格式化VOL10 (10日均量线)
     if len(df.loc[:ts_sec]) >= 10:
         vol10 = df['volume'].loc[:ts_sec].iloc[-10:].mean()
         vol_parts.append(f'VOL10: <span style="color:green">{vol10 / 10000:.0f}万</span>')
 
     vol_txt = ' | '.join(vol_parts)
-
     if vol_hover_label is not None:
         ax1_rect = ax1.boundingRect()
         vol_hover_label.setPos(ax1_rect.width() - 200, 20)
@@ -774,10 +693,11 @@ def default_hover_callback(x, y, df, symbol, interval, hover_label, rsi_hover_la
     # ========== 6. 新增：更新布林带(BOLL)数值信息 ==========
     # ========== 6. 更新布林带(BOLL)与乖离率(BIAS)数值信息 ==========
     boll_txt = ''
-    # 检查所有需要的列是否存在
+    # 检查所有需要的列是否存在（包括BIAS列）
     bias_cols = ['bias6', 'bias12', 'bias24']
     if all(col in df.columns for col in ['boll_hi', 'boll_lo', 'boll_mid'] + bias_cols):
         row = df.loc[ts_sec]
+        # 确保中轨值有效
         if pd.notna(row['boll_mid']):
             # 定义颜色方案
             colors = {
@@ -813,6 +733,7 @@ def default_hover_callback(x, y, df, symbol, interval, hover_label, rsi_hover_la
         boll_hover_label.setPos(ax5_rect.width() - 350, 20)  # 宽度稍微调宽一点，因为内容变多了
         boll_hover_label.setText(boll_txt)
 
+
 def default_crosshair_callback(x, y, xtext, ytext, df):
     """
     默认的十字线信息回调函数。
@@ -824,6 +745,7 @@ def default_crosshair_callback(x, y, xtext, ytext, df):
         ytext = '%s (close%+.2f)' % (ytext, (y - close_price))
     return xtext, ytext
 
+
 def create_ctrl_panel(win):
     panel = QWidget(win)
     panel.move(100, 0)
@@ -831,7 +753,7 @@ def create_ctrl_panel(win):
     layout = QGridLayout(panel)
 
     panel.symbol = QComboBox(panel)
-    [panel.symbol.addItem(i+'USDT') for i in 'BTC ETH XRP DOGE BNB SOL ADA LTC LINK DOT TRX BCH'.split()]
+    [panel.symbol.addItem(i + 'USDT') for i in 'BTC ETH XRP DOGE BNB SOL ADA LTC LINK DOT TRX BCH'.split()]
     panel.symbol.setCurrentIndex(1)
     layout.addWidget(panel.symbol, 0, 0)
     panel.symbol.currentTextChanged.connect(change_asset)
@@ -862,17 +784,21 @@ def create_ctrl_panel(win):
 
     return panel
 
-# ========== 核心公共API ==========
+
+# ========== 核心公共API（修改为不自动show） ==========
 def plot_a_stock_analysis(
         df,
         symbol='A股',
         title_suffix='',
         signals=None,
         hover_callback=None,  # 新增参数
-        crosshair_callback=None  # 新增参数
+        crosshair_callback=None,  # 新增参数
+        is_weekly=False,
+        show_immediately=False  # 新增：是否立即显示窗口（用于异步控制），默认False
 ):
     """
     绘制完整的A股多指标分析图（新增RSI+KDJ+MACD动态数值显示）。
+    【修改】不再自动调用 fplt.show()，等待最后的统一调用
 
     参数:
         df (pd.DataFrame): 必须包含列 ['open', 'high', 'low', 'close', 'volume']，且索引为时间戳（秒）。
@@ -881,11 +807,12 @@ def plot_a_stock_analysis(
         title_suffix (str): 标题后缀，可选。
         signals (list): 交易信号列表，例如：
                         - [{'date': '2023-05-10', 'type': 'buy'}, {'date': '2023-06-15', 'type': 'sell'}]
-                        - 或 [('2023-05-10', 'buy'), ('2023-06-15', 'sell')]
         hover_callback (callable): 自定义悬停回调，签名为 func(x, y, df, symbol, interval, hover_label, rsi_hover_label, kdj_hover_label, macd_hover_label, ax, ax3, ax4, ax2)
         crosshair_callback (callable): 自定义十字线回调，签名为 func(x, y, xtext, ytext, df)
+        is_weekly (bool): 是否为周线图（用于调整标题和周期显示）
+        show_immediately (bool): 是否立即显示（默认False，等待最后统一显示）
     """
-    interval = 'd'  # 日线（必须定义！）
+    interval = 'w' if is_weekly else 'd'  # 周线/日线标识
 
     # change to b/w coloring templates for next plots
     fplt.candle_bull_color = fplt.volume_bull_color = 'red'  # K线/成交量阳线边框颜色
@@ -895,10 +822,15 @@ def plot_a_stock_analysis(
     fplt.legend_text_color = 'black'
     fplt.legend_background_color = 'gray'
 
-    full_title = f'A股 {symbol} 平均K线图'
+    # 调整标题：区分日线/周线
+    period_label = '周线' if is_weekly else '日线'
+    full_title = f'A股 {symbol} {period_label} 平均K线图'
     if title_suffix:
         full_title += f' - {title_suffix}'
-    ax, ax1, ax2, ax3, ax4, ax5, ax6, ax7 = fplt.create_plot(full_title, rows=8)
+
+    # 关键：创建新窗口（每个plot调用创建独立窗口）
+    ax, ax1, ax2, ax3, ax4, ax5, ax6, ax7 = fplt.create_plot(full_title, rows=8,
+                                                             init_zoom_periods=50 if is_weekly else 100)
     # 不显示第一个ax的网格线
     ax.set_visible(xgrid=False, ygrid=False)
 
@@ -965,6 +897,7 @@ def plot_a_stock_analysis(
 
     # volume chart
     plot_heikin_ashi_volume(df, ax1)
+    plot_volume(df, ax1)
     plot_vma(df, ax=ax1)
 
     plot_macd(df, ax2)  # MACD计算后会自动给df添加macd_diff列
@@ -985,6 +918,7 @@ def plot_a_stock_analysis(
 
     # 先执行：计算并绘图
     plot_bollinger_bands(df, ax5)  # <--- 这一步会把 boll_mid, boll_hi, boll_lo 写入 df
+
     # 包装回调函数，注意这里增加了 vol_hover_label 和 ax1
     def wrapped_hover(x, y):
         return final_hover_cb(x, y, df, symbol, interval, hover_label, rsi_hover_label, kdj_hover_label,
@@ -998,16 +932,99 @@ def plot_a_stock_analysis(
     fplt.add_crosshair_info(wrapped_crosshair, ax=ax)
 
     fplt.autoviewrestore()
-    fplt.show()
 
-# 如果直接运行此文件，则执行示例（保留原有逻辑）
-if __name__ == '__main__':
+    # 关键：根据参数控制是否立即显示窗口
+    if show_immediately:
+        fplt.show(qt_exec=False)  # qt_exec=False：不阻塞Qt事件循环
+
+
+# ========== 空函数（避免运行时错误） ==========
+def change_asset(*args):
+    pass
+
+
+def dark_mode_toggle(*args):
+    pass
+
+
+# ========== 新增：异步绘制日线图的函数 ==========
+def plot_daily_chart_async(df_daily, symbol, signals):
+    """异步绘制日线图（用于QTimer调用）"""
+    plot_a_stock_analysis(
+        df=df_daily,
+        symbol=symbol,
+        title_suffix='日线图',
+        signals=signals,
+        is_weekly=False,
+        show_immediately=True
+    )
+
+
+# ========== 主函数：使用 finplot 原生 show() ==========
+def main():
     symbol = '002738'
-    df = download_price_history(
+
+    # 1. 设置Qt属性（不创建App实例，不启动事件循环）
+    init_qt_attributes()
+
+    # 2. 下载日线数据
+    df_daily = download_price_history(
         symbol=symbol,
         start_time='2014-12-30',  # 你的数据起始日期
         end_time='2026-01-01'  # 数据结束日期
     )
     # 新增：添加date_str列（draw_trade_signals需要）
-    df['date_str'] = pd.to_datetime(df.index, unit='s').strftime('%Y-%m-%d')
-    plot_a_stock_analysis(df, symbol=symbol)
+    df_daily['date_str'] = pd.to_datetime(df_daily.index, unit='s').strftime('%Y-%m-%d')
+
+    # 2. 转换为周线数据
+    df_weekly = resample_to_weekly(df_daily)
+
+    # 3. 定义交易信号示例（可选）
+    sample_signals = [
+        {'date': '2023-01-20', 'type': 'buy'},
+        {'date': '2023-06-30', 'type': 'sell'},
+        {'date': '2024-03-15', 'type': 'buy'}
+    ]
+
+    # 4. 绘制周线图（不立即显示）
+    print("正在创建周线图...")
+    plot_a_stock_analysis(
+        df=df_weekly,
+        symbol=symbol,
+        title_suffix='周线图',
+        signals=sample_signals,
+        is_weekly=True,
+        show_immediately=False
+    )
+
+    # 5. 绘制日线图（不立即显示）
+    print("正在创建日线图...")
+    plot_a_stock_analysis(
+        df=df_daily,
+        symbol=symbol,
+        title_suffix='日线图',
+        signals=sample_signals,
+        is_weekly=False,
+        show_immediately=False
+    )
+
+    print("两个窗口都已创建，正在显示...")
+
+    # ========== 【关键】使用 finplot 原生的 show() ==========
+    # 这会显示所有窗口，并阻塞直到所有窗口都关闭
+    fplt.show()
+
+    print("所有窗口已关闭，程序退出")
+    sys.exit(0)
+
+
+# 如果直接运行此文件，则执行示例（保留原有逻辑）
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        print(f"发生错误: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)

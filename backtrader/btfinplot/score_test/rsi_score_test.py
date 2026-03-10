@@ -2,425 +2,694 @@ import unittest
 import math
 
 # ===================== 第一步：定义核心配置（和手册完全对齐） =====================
-# 1. 信号类型权重配置（核心：权重数值决定优先级）
-RSI_SIGNAL_WEIGHTS = {
-    '趋势反转': 2.0,
-    '连续极值': 1.5,
-    '动态金叉/死叉/拐头/企稳': 1.2,
-    '静态排列': 1.0,
-    '粘合平衡': 0.5
-}
 RSI_RULES = [
     # ---------------- 优先级1：趋势反转 (权重2.0) ----------------
     {
         "priority": 1,
         "signal_name": "突破金叉",
         "signal_type": "趋势反转",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi6_-1'] < d['rsi12_-1']) and
-                                    (d['rsi6_-1'] < 50) and (d['rsi6_0'] > 50),
+        "weight": 2.0,  # 👈 权重直接写在这里
+        "condition_func": lambda strat: (strat.rsi6[0] - strat.rsi6[-1] >= 14),
         "buy_score": 2.0,
+        "sell_score": 0.0
+    },
+    {
+        "priority": 1,
+        "signal_name": "突破金叉",
+        "signal_type": "趋势反转",
+        "weight": 1.0, # 👈 权重直接写在这里
+        "condition_func": lambda strat: (5 < strat.rsi6[0] - strat.rsi6[-1] < 14),
+        "buy_score": 1.5,
+        "sell_score": 0.0
+    },
+    {
+        "priority": 1,
+        "signal_name": "突破金叉",
+        "signal_type": "趋势反转",
+        "weight": 1.0,  # 👈 权重直接写在这里
+        "condition_func": lambda strat: (strat.rsi6[0] > strat.rsi6[-1]),
+        "buy_score": 1.0,
         "sell_score": 0.0
     },
     {
         "priority": 1,
         "signal_name": "破位死叉",
         "signal_type": "趋势反转",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi6_-1'] > d['rsi12_-1']) and
-                                    (d['rsi6_-1'] > 50) and (d['rsi6_0'] < 50),
-        "buy_score": 0.0,
-        "sell_score": 2.0
-    },
-
-    # ---------------- 优先级2：连续极值 (权重1.5) ----------------
-    {
-        "priority": 2,
-        "signal_name": "连续超卖",
-        "signal_type": "连续极值",
-        "condition_func": lambda d: (d['rsi6_0'] < 20) and (d['rsi6_-1'] < 20) and (d['rsi6_-2'] < 20) and
-                                    (d['rsi12_0'] < 30),
-        "buy_score": 2.0,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 2,
-        "signal_name": "连续超买",
-        "signal_type": "连续极值",
-        "condition_func": lambda d: (d['rsi6_0'] > 80) and (d['rsi6_-1'] > 80) and (d['rsi6_-2'] > 80) and
-                                    (d['rsi12_0'] > 70),
+        "weight": 1.0,  # 👈 权重直接写在这里
+        "condition_func": lambda strat: (strat.rsi6[-1] - strat.rsi6[0] >= 15),
         "buy_score": 0.0,
         "sell_score": 2.0
     },
     {
-        "priority": 2,
-        "signal_name": "极端超卖",
-        "signal_type": "连续极值",
-        "condition_func": lambda d: (d['rsi6_0'] < 10) and (d['rsi6_-1'] < 10),
-        "buy_score": 2.0,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 2,
-        "signal_name": "极端超买",
-        "signal_type": "连续极值",
-        "condition_func": lambda d: (d['rsi6_0'] > 90) and (d['rsi6_-1'] > 90),
+        "priority": 1,
+        "signal_name": "破位死叉",
+        "signal_type": "趋势反转",
+        "weight": 1.0,  # 👈 权重直接写在这里
+        "condition_func": lambda strat: (5 < strat.rsi6[-1] - strat.rsi6[0] < 15),
         "buy_score": 0.0,
-        "sell_score": 2.0
-    },
-
-    # ---------------- 优先级3：动态金叉/死叉/拐头/企稳/延续 (权重1.2) ----------------
-    {
-        "priority": 3,
-        "signal_name": "超卖金叉",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi6_-1'] < d['rsi12_-1']) and
-                                    (d['rsi6_0'] < 30),
-        "buy_score": 1.8,
-        "sell_score": 0.0
+        "sell_score": 1.5
     },
     {
-        "priority": 3,
-        "signal_name": "震荡金叉",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi6_-1'] < d['rsi12_-1']) and
-                                    (30 <= d['rsi6_0'] <= 50),
-        "buy_score": 1.5,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 3,
-        "signal_name": "高位金叉",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi6_-1'] < d['rsi12_-1']) and
-                                    (d['rsi6_0'] > 70),
+        "priority": 1,
+        "signal_name": "破位死叉",
+        "signal_type": "趋势反转",
+        "weight": 1.0, # 👈 权重直接写在这里
+        "condition_func": lambda strat: (strat.rsi6[-1] > strat.rsi6[0]),
         "buy_score": 0.0,
         "sell_score": 1.0
     },
-    {
-        "priority": 3,
-        "signal_name": "超买死叉",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi6_-1'] > d['rsi12_-1']) and
-                                    (d['rsi6_0'] > 70),
-        "buy_score": 0.0,
-        "sell_score": 1.8
-    },
-    {
-        "priority": 3,
-        "signal_name": "震荡死叉",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi6_-1'] > d['rsi12_-1']) and
-                                    (50 <= d['rsi6_0'] <= 70),
-        "buy_score": 0.0,
-        "sell_score": 1.5
-    },
-    {
-        "priority": 3,
-        "signal_name": "低位死叉",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi6_-1'] > d['rsi12_-1']) and
-                                    (d['rsi6_0'] < 30),
-        "buy_score": 1.0,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 3,
-        "signal_name": "低位拐头",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_-1'] < 30) and (30 <= d['rsi6_0'] <= 50),
-        "buy_score": 1.8,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 3,
-        "signal_name": "高位拐头",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_-1'] > 70) and (50 <= d['rsi6_0'] <= 70),
-        "buy_score": 0.0,
-        "sell_score": 1.8
-    },
-    {
-        "priority": 3,
-        "signal_name": "超卖企稳",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_-1'] < 30) and (d['rsi6_-2'] < 30) and (d['rsi6_0'] - d['rsi6_-1'] >= 5) and
-                                    (d['rsi6_0'] < 30),  # 新增：确保不触发低位拐头
-        "buy_score": 1.5,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 3,
-        "signal_name": "超买回落",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_-1'] > 70) and (d['rsi6_-2'] > 70) and (d['rsi6_-1'] - d['rsi6_0'] >= 5) and
-                                    (d['rsi6_0'] > 70),  # 新增：确保不触发高位拐头
-        "buy_score": 0.0,
-        "sell_score": 1.5
-    },
-    {
-        "priority": 3,
-        "signal_name": "金叉延续2日",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_-2'] > d['rsi12_-2'] and d['rsi6_-3'] < d['rsi12_-3']) and
-                                    (d['rsi6_-1'] > d['rsi12_-1']) and (d['rsi6_0'] > d['rsi12_0']) and
-                                    (30 <= d['rsi6_0'] <= 50) and not (d['rsi6_-3'] > d['rsi12_-3'] and d['rsi6_-4'] < d['rsi12_-4']),  # 排除3日延续
-        "buy_score": 1.5,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 3,
-        "signal_name": "金叉延续3日",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_-3'] > d['rsi12_-3'] and d['rsi6_-4'] < d['rsi12_-4']) and
-                                    (d['rsi6_-2'] > d['rsi12_-2']) and (d['rsi6_-1'] > d['rsi12_-1']) and
-                                    (d['rsi6_0'] > d['rsi12_0']) and (30 <= d['rsi6_0'] <= 50),
-        "buy_score": 1.8,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 3,
-        "signal_name": "金叉后超买",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: ((d['rsi6_-2'] > d['rsi12_-2'] and d['rsi6_-3'] < d['rsi12_-3']) or
-                                     (d['rsi6_-3'] > d['rsi12_-3'] and d['rsi6_-4'] < d['rsi12_-4'])) and
-                                    (d['rsi6_-1'] > d['rsi12_-1']) and (d['rsi6_0'] > d['rsi12_0']) and
-                                    (d['rsi6_0'] > 70),
-        "buy_score": 0.0,
-        "sell_score": 1.8
-    },
-    {
-        "priority": 3,
-        "signal_name": "死叉延续2日",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_-2'] < d['rsi12_-2'] and d['rsi6_-3'] > d['rsi12_-3']) and
-                                    (d['rsi6_-1'] < d['rsi12_-1']) and (d['rsi6_0'] < d['rsi12_0']) and
-                                    (50 <= d['rsi6_0'] <= 70) and not (d['rsi6_-3'] < d['rsi12_-3'] and d['rsi6_-4'] > d['rsi12_-4']),  # 排除3日延续
-        "buy_score": 0.0,
-        "sell_score": 1.5
-    },
-    {
-        "priority": 3,
-        "signal_name": "死叉延续3日",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: (d['rsi6_-3'] < d['rsi12_-3'] and d['rsi6_-4'] > d['rsi12_-4']) and
-                                    (d['rsi6_-2'] < d['rsi12_-2']) and (d['rsi6_-1'] < d['rsi12_-1']) and
-                                    (d['rsi6_0'] < d['rsi12_0']) and (50 <= d['rsi6_0'] <= 70),
-        "buy_score": 0.0,
-        "sell_score": 1.8
-    },
-    {
-        "priority": 3,
-        "signal_name": "死叉后超卖",
-        "signal_type": "动态金叉/死叉/拐头/企稳",
-        "condition_func": lambda d: ((d['rsi6_-2'] < d['rsi12_-2'] and d['rsi6_-3'] > d['rsi12_-3']) or
-                                     (d['rsi6_-3'] < d['rsi12_-3'] and d['rsi6_-4'] > d['rsi12_-4'])) and
-                                    (d['rsi6_-1'] < d['rsi12_-1']) and (d['rsi6_0'] < d['rsi12_0']) and
-                                    (d['rsi6_0'] < 30) and not (d['rsi6_0'] < d['rsi12_0'] and d['rsi6_-1'] > d['rsi12_-1']),  # 排除低位死叉
-        "buy_score": 1.0,
-        "sell_score": 0.0
-    },
+    #
+    # # ---------------- 优先级2：连续极值 (权重1.5) ----------------
+    # {
+    #     "priority": 2,
+    #     "signal_name": "连续超卖",
+    #     "signal_type": "连续极值",
+    #     "condition_func": lambda d: (d['rsi6_0'] < 20) and (d['rsi6_-1'] < 20) and (d['rsi6_-2'] < 20) and
+    #                                 (d['rsi12_0'] < 30),
+    #     "buy_score": 2.0,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 2,
+    #     "signal_name": "连续超买",
+    #     "signal_type": "连续极值",
+    #     "condition_func": lambda d: (d['rsi6_0'] > 80) and (d['rsi6_-1'] > 80) and (d['rsi6_-2'] > 80) and
+    #                                 (d['rsi12_0'] > 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 2.0
+    # },
+    # {
+    #     "priority": 2,
+    #     "signal_name": "极端超卖",
+    #     "signal_type": "连续极值",
+    #     "condition_func": lambda d: (d['rsi6_0'] < 10) and (d['rsi6_-1'] < 10),
+    #     "buy_score": 2.0,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 2,
+    #     "signal_name": "极端超买",
+    #     "signal_type": "连续极值",
+    #     "condition_func": lambda d: (d['rsi6_0'] > 90) and (d['rsi6_-1'] > 90),
+    #     "buy_score": 0.0,
+    #     "sell_score": 2.0
+    # },
+    #
+    # # ---------------- 优先级3：动态金叉/死叉/拐头/企稳/延续 (权重1.2) ----------------
+    # {
+    #     "priority": 3,
+    #     "signal_name": "超卖金叉",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi6_-1'] < d['rsi12_-1']) and
+    #                                 (d['rsi6_0'] < 30),
+    #     "buy_score": 1.8,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "震荡金叉",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi6_-1'] < d['rsi12_-1']) and
+    #                                 (30 <= d['rsi6_0'] <= 50),
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "高位金叉",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi6_-1'] < d['rsi12_-1']) and
+    #                                 (d['rsi6_0'] > 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "超买死叉",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi6_-1'] > d['rsi12_-1']) and
+    #                                 (d['rsi6_0'] > 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.8
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "震荡死叉",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi6_-1'] > d['rsi12_-1']) and
+    #                                 (50 <= d['rsi6_0'] <= 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.5
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "低位死叉",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi6_-1'] > d['rsi12_-1']) and
+    #                                 (d['rsi6_0'] < 30),
+    #     "buy_score": 1.0,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "低位拐头",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_-1'] < 30) and (30 <= d['rsi6_0'] <= 50),
+    #     "buy_score": 1.8,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "高位拐头",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_-1'] > 70) and (50 <= d['rsi6_0'] <= 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.8
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "超卖企稳",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_-1'] < 30) and (d['rsi6_-2'] < 30) and (d['rsi6_0'] - d['rsi6_-1'] >= 5) and
+    #                                 (d['rsi6_0'] < 30),  # 新增：确保不触发低位拐头
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "超买回落",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_-1'] > 70) and (d['rsi6_-2'] > 70) and (d['rsi6_-1'] - d['rsi6_0'] >= 5) and
+    #                                 (d['rsi6_0'] > 70),  # 新增：确保不触发高位拐头
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.5
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "金叉延续2日",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_-2'] > d['rsi12_-2'] and d['rsi6_-3'] < d['rsi12_-3']) and
+    #                                 (d['rsi6_-1'] > d['rsi12_-1']) and (d['rsi6_0'] > d['rsi12_0']) and
+    #                                 (30 <= d['rsi6_0'] <= 50) and not (d['rsi6_-3'] > d['rsi12_-3'] and d['rsi6_-4'] < d['rsi12_-4']),  # 排除3日延续
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "金叉延续3日",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_-3'] > d['rsi12_-3'] and d['rsi6_-4'] < d['rsi12_-4']) and
+    #                                 (d['rsi6_-2'] > d['rsi12_-2']) and (d['rsi6_-1'] > d['rsi12_-1']) and
+    #                                 (d['rsi6_0'] > d['rsi12_0']) and (30 <= d['rsi6_0'] <= 50),
+    #     "buy_score": 1.8,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "金叉后超买",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: ((d['rsi6_-2'] > d['rsi12_-2'] and d['rsi6_-3'] < d['rsi12_-3']) or
+    #                                  (d['rsi6_-3'] > d['rsi12_-3'] and d['rsi6_-4'] < d['rsi12_-4'])) and
+    #                                 (d['rsi6_-1'] > d['rsi12_-1']) and (d['rsi6_0'] > d['rsi12_0']) and
+    #                                 (d['rsi6_0'] > 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.8
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "死叉延续2日",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_-2'] < d['rsi12_-2'] and d['rsi6_-3'] > d['rsi12_-3']) and
+    #                                 (d['rsi6_-1'] < d['rsi12_-1']) and (d['rsi6_0'] < d['rsi12_0']) and
+    #                                 (50 <= d['rsi6_0'] <= 70) and not (d['rsi6_-3'] < d['rsi12_-3'] and d['rsi6_-4'] > d['rsi12_-4']),  # 排除3日延续
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.5
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "死叉延续3日",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: (d['rsi6_-3'] < d['rsi12_-3'] and d['rsi6_-4'] > d['rsi12_-4']) and
+    #                                 (d['rsi6_-2'] < d['rsi12_-2']) and (d['rsi6_-1'] < d['rsi12_-1']) and
+    #                                 (d['rsi6_0'] < d['rsi12_0']) and (50 <= d['rsi6_0'] <= 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.8
+    # },
+    # {
+    #     "priority": 3,
+    #     "signal_name": "死叉后超卖",
+    #     "signal_type": "动态金叉/死叉/拐头/企稳",
+    #     "condition_func": lambda d: ((d['rsi6_-2'] < d['rsi12_-2'] and d['rsi6_-3'] > d['rsi12_-3']) or
+    #                                  (d['rsi6_-3'] < d['rsi12_-3'] and d['rsi6_-4'] > d['rsi12_-4'])) and
+    #                                 (d['rsi6_-1'] < d['rsi12_-1']) and (d['rsi6_0'] < d['rsi12_0']) and
+    #                                 (d['rsi6_0'] < 30) and not (d['rsi6_0'] < d['rsi12_0'] and d['rsi6_-1'] > d['rsi12_-1']),  # 排除低位死叉
+    #     "buy_score": 1.0,
+    #     "sell_score": 0.0
+    # },
 
     # ---------------- 优先级4：静态排列 (权重1.0) ----------------
-    {
-        "priority": 4,
-        "signal_name": "最强多头(RSI6<20)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
-                                    (d['rsi6_0'] < 20),
-        "buy_score": 2.0,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 4,
-        "signal_name": "最强多头(20<=RSI6<=50)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
-                                    (20 <= d['rsi6_0'] <= 50),
-        "buy_score": 1.5,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 4,
-        "signal_name": "最强多头(50<=RSI6<=70)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
-                                    (50 <= d['rsi6_0'] <= 70),
-        "buy_score": 1.0,
-        "sell_score": 0.5
-    },
-    {
-        "priority": 4,
-        "signal_name": "最强多头(RSI6>70)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
-                                    (d['rsi6_0'] > 70),
-        "buy_score": 0.0,
-        "sell_score": 2.0
-    },
-    {
-        "priority": 4,
-        "signal_name": "短多长空(RSI6<30)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
-                                    (d['rsi6_0'] < 30),
-        "buy_score": 1.5,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 4,
-        "signal_name": "短多长空(30<=RSI6<=70)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
-                                    (30 <= d['rsi6_0'] <= 70),
-        "buy_score": 0.8,
-        "sell_score": 0.8
-    },
-    {
-        "priority": 4,
-        "signal_name": "短多长空(RSI6>70)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
-                                    (d['rsi6_0'] > 70),
-        "buy_score": 0.0,
-        "sell_score": 1.8
-    },
-    {
-        "priority": 4,
-        "signal_name": "短空多长(RSI6<30)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
-                                    (d['rsi6_0'] < 30),
-        "buy_score": 1.2,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 4,
-        "signal_name": "短空多长(30<=RSI6<=70)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
-                                    (30 <= d['rsi6_0'] <= 70),
-        "buy_score": 0.5,
-        "sell_score": 1.0
-    },
-    {
-        "priority": 4,
-        "signal_name": "短空多长(RSI6>70)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
-                                    (d['rsi6_0'] > 70),
-        "buy_score": 0.0,
-        "sell_score": 1.5
-    },
-    {
-        "priority": 4,
-        "signal_name": "最强空头(RSI6<20)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
-                                    (d['rsi6_0'] < 20),
-        "buy_score": 1.5,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 4,
-        "signal_name": "最强空头(20<=RSI6<=50)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
-                                    (20 <= d['rsi6_0'] <= 50),
-        "buy_score": 0.0,
-        "sell_score": 1.5
-    },
-    {
-        "priority": 4,
-        "signal_name": "最强空头(50<=RSI6<=70)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
-                                    (50 <= d['rsi6_0'] <= 70),
-        "buy_score": 0.0,
-        "sell_score": 2.0
-    },
-    {
-        "priority": 4,
-        "signal_name": "最强空头(RSI6>70)",
-        "signal_type": "静态排列",
-        "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
-                                    (d['rsi6_0'] > 70),
-        "buy_score": 0.0,
-        "sell_score": 2.0
-    },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "最强多头(RSI6<20)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
+    #                                 (d['rsi6_0'] < 20),
+    #     "buy_score": 2.0,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "最强多头(20<=RSI6<=50)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
+    #                                 (20 <= d['rsi6_0'] <= 50),
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "最强多头(50<=RSI6<=70)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
+    #                                 (50 <= d['rsi6_0'] <= 70),
+    #     "buy_score": 1.0,
+    #     "sell_score": 0.5
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "最强多头(RSI6>70)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
+    #                                 (d['rsi6_0'] > 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 2.0
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "短多长空(RSI6<30)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
+    #                                 (d['rsi6_0'] < 30),
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "短多长空(30<=RSI6<=70)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
+    #                                 (30 <= d['rsi6_0'] <= 70),
+    #     "buy_score": 0.8,
+    #     "sell_score": 0.8
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "短多长空(RSI6>70)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] > d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
+    #                                 (d['rsi6_0'] > 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.8
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "短空多长(RSI6<30)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
+    #                                 (d['rsi6_0'] < 30),
+    #     "buy_score": 1.2,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "短空多长(30<=RSI6<=70)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
+    #                                 (30 <= d['rsi6_0'] <= 70),
+    #     "buy_score": 0.5,
+    #     "sell_score": 1.0
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "短空多长(RSI6>70)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] > d['rsi24_0']) and
+    #                                 (d['rsi6_0'] > 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.5
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "最强空头(RSI6<20)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
+    #                                 (d['rsi6_0'] < 20),
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "最强空头(20<=RSI6<=50)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
+    #                                 (20 <= d['rsi6_0'] <= 50),
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.5
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "最强空头(50<=RSI6<=70)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
+    #                                 (50 <= d['rsi6_0'] <= 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 2.0
+    # },
+    # {
+    #     "priority": 4,
+    #     "signal_name": "最强空头(RSI6>70)",
+    #     "signal_type": "静态排列",
+    #     "condition_func": lambda d: (d['rsi6_0'] < d['rsi12_0']) and (d['rsi12_0'] < d['rsi24_0']) and
+    #                                 (d['rsi6_0'] > 70),
+    #     "buy_score": 0.0,
+    #     "sell_score": 2.0
+    # },
 
     # ---------------- 优先级5：粘合平衡 (权重0.5) ----------------
-    {
-        "priority": 5,
-        "signal_name": "完全粘合(RSI6<50)",
-        "signal_type": "粘合平衡",
-        "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
-                                    (abs(d['rsi12_0'] - d['rsi24_0']) < 2) and (d['rsi6_0'] < 50) and
-                                    # 排除静态排列信号
-                                    not ((d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']) or
-                                         (d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']) or
-                                         (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']) or
-                                         (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0'])),
-        "buy_score": 0.5,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 5,
-        "signal_name": "完全粘合(RSI6>50)",
-        "signal_type": "粘合平衡",
-        "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
-                                    (abs(d['rsi12_0'] - d['rsi24_0']) < 2) and (d['rsi6_0'] > 50) and
-                                    # 排除静态排列信号
-                                    not ((d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']) or
-                                         (d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']) or
-                                         (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']) or
-                                         (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0'])),
-        "buy_score": 0.0,
-        "sell_score": 0.5
-    },
-    {
-        "priority": 5,
-        "signal_name": "偏多粘合(RSI6<30)",
-        "signal_type": "粘合平衡",
-        "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
-                                    (d['rsi12_0'] > d['rsi24_0']) and (d['rsi6_0'] < 30) and
-                                    not (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']),  # 排除短空多长
-        "buy_score": 1.5,
-        "sell_score": 0.0
-    },
-    {
-        "priority": 5,
-        "signal_name": "偏多粘合(RSI6>70)",
-        "signal_type": "粘合平衡",
-        "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
-                                    (d['rsi12_0'] > d['rsi24_0']) and (d['rsi6_0'] > 70) and
-                                    not (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']),  # 排除短空多长
-        "buy_score": 0.0,
-        "sell_score": 1.5
-    },
-    {
-        "priority": 5,
-        "signal_name": "偏空粘合(RSI6<30)",
-        "signal_type": "粘合平衡",
-        "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
-                                    (d['rsi12_0'] < d['rsi24_0']) and (d['rsi6_0'] < 30) and
-                                    not (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']),  # 排除最强空头
-        "buy_score": 1.2,
-        "sell_score": 0.0
-    },
-    # 找到RSI_RULES中「偏空粘合(RSI6>70)」的规则，修改condition_func：
-    {
-        "priority": 5,
-        "signal_name": "偏空粘合(RSI6>70)",
-        "signal_type": "粘合平衡",
-        "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
-                                    (d['rsi12_0'] < d['rsi24_0']) and (d['rsi6_0'] > 70) and
-                                    # 新增：同时排除最强空头 + 短多长空
-                                    not (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']) and  # 排除最强空头
-                                    not (d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']),  # 排除短多长空
-        "buy_score": 0.0,
-        "sell_score": 1.8
-    },
+    # {
+    #     "priority": 5,
+    #     "signal_name": "完全粘合(RSI6<50)",
+    #     "signal_type": "粘合平衡",
+    #     "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
+    #                                 (abs(d['rsi12_0'] - d['rsi24_0']) < 2) and (d['rsi6_0'] < 50) and
+    #                                 # 排除静态排列信号
+    #                                 not ((d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']) or
+    #                                      (d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']) or
+    #                                      (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']) or
+    #                                      (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0'])),
+    #     "buy_score": 0.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 5,
+    #     "signal_name": "完全粘合(RSI6>50)",
+    #     "signal_type": "粘合平衡",
+    #     "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
+    #                                 (abs(d['rsi12_0'] - d['rsi24_0']) < 2) and (d['rsi6_0'] > 50) and
+    #                                 # 排除静态排列信号
+    #                                 not ((d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']) or
+    #                                      (d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']) or
+    #                                      (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']) or
+    #                                      (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0'])),
+    #     "buy_score": 0.0,
+    #     "sell_score": 0.5
+    # },
+    # {
+    #     "priority": 5,
+    #     "signal_name": "偏多粘合(RSI6<30)",
+    #     "signal_type": "粘合平衡",
+    #     "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
+    #                                 (d['rsi12_0'] > d['rsi24_0']) and (d['rsi6_0'] < 30) and
+    #                                 not (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']),  # 排除短空多长
+    #     "buy_score": 1.5,
+    #     "sell_score": 0.0
+    # },
+    # {
+    #     "priority": 5,
+    #     "signal_name": "偏多粘合(RSI6>70)",
+    #     "signal_type": "粘合平衡",
+    #     "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
+    #                                 (d['rsi12_0'] > d['rsi24_0']) and (d['rsi6_0'] > 70) and
+    #                                 not (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] > d['rsi24_0']),  # 排除短空多长
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.5
+    # },
+    # {
+    #     "priority": 5,
+    #     "signal_name": "偏空粘合(RSI6<30)",
+    #     "signal_type": "粘合平衡",
+    #     "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
+    #                                 (d['rsi12_0'] < d['rsi24_0']) and (d['rsi6_0'] < 30) and
+    #                                 not (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']),  # 排除最强空头
+    #     "buy_score": 1.2,
+    #     "sell_score": 0.0
+    # },
+    # # 找到RSI_RULES中「偏空粘合(RSI6>70)」的规则，修改condition_func：
+    # {
+    #     "priority": 5,
+    #     "signal_name": "偏空粘合(RSI6>70)",
+    #     "signal_type": "粘合平衡",
+    #     "condition_func": lambda d: (abs(d['rsi6_0'] - d['rsi12_0']) < 2) and
+    #                                 (d['rsi12_0'] < d['rsi24_0']) and (d['rsi6_0'] > 70) and
+    #                                 # 新增：同时排除最强空头 + 短多长空
+    #                                 not (d['rsi6_0'] < d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']) and  # 排除最强空头
+    #                                 not (d['rsi6_0'] > d['rsi12_0'] and d['rsi12_0'] < d['rsi24_0']),  # 排除短多长空
+    #     "buy_score": 0.0,
+    #     "sell_score": 1.8
+    # },
 ]
 
+def get_rsi_status(strat, rsi_periods=(6, 12, 24), max_lookback=60, stock_type='中盘股'):
+    """
+    获取RSI（6,12,24）状态的完整描述（A股实战终极版+盘型参数化）
+    核心优化：盘型作为参数传递（默认中盘），无需依赖流通市值数据
+
+    参数:
+        strat: 策略实例 (需包含 rsi6/rsi12/rsi24 指标，data包含close/volume字段)
+        rsi_periods: RSI周期，默认(6,12,24)
+        max_lookback: 最大回溯天数（用于背离/波动率计算）
+        stock_type: 股票盘型（可选：大盘股/中盘股/小盘股/微盘股），默认中盘股
+
+    返回:
+        dict: 包含盘型、分盘阈值、全量RSI状态的实战信息
+    """
+    # 校验盘型参数合法性
+    valid_stock_types = ['大盘股', '中盘股', '小盘股', '微盘股']
+    if stock_type not in valid_stock_types:
+        print(f"警告：盘型参数错误（{stock_type}），自动切换为中盘股")
+        stock_type = '中盘股'
+
+    # 初始化结果字典
+    result = {
+        # 盘型相关（参数传入）
+        'stock_type': stock_type,  # 大盘/中盘/小盘/微盘
+        'rsi_thresholds': {  # 分盘型RSI阈值（超买/超卖/涨幅）
+            'over_buy': 70,
+            'over_sell': 30,
+            'min_rise': 0.5
+        },
+        # 基础状态
+        'over_buy_sell': '未知',  # 超买/超卖/正常区间
+        'trend_status': '未知',  # 上涨/下跌/震荡
+        'cross_status': '未知',  # 金叉/死叉/无交叉
+        'divergence': '未知',  # 顶背离/底背离/无背离
+        # 原始数值
+        'rsi_6': -1,  # 6日RSI数值
+        'rsi_12': -1,  # 12日RSI数值
+        'rsi_24': -1,  # 24日RSI数值
+        # 核心实战字段
+        'rsi6_rise': 0.0,  # RSI6单日涨幅（带小数，精准）
+        'avg_volatility': 0.5,  # 近20天RSI6平均波动率（适配不同标的）
+        'is_effective_gold': False,  # 有效金叉（A股实战级）
+        'is_effective_dead': False,  # 有效死叉（A股实战级）
+        'multi_period_resonance': False,  # 多周期共振（6/12/24同步趋势）
+        'signal_strength': 0.0  # 信号强度（0-1，越高越可靠）
+    }
+
+    # ===================== 1. 分盘型阈值配置（参数化核心） =====================
+    # 按传入的盘型配置专属阈值（A股实战标准）
+    if stock_type == '大盘股':
+        result['rsi_thresholds'] = {'over_buy': 65, 'over_sell': 35, 'min_rise': 0.3}
+    elif stock_type == '中盘股':  # 默认
+        result['rsi_thresholds'] = {'over_buy': 70, 'over_sell': 30, 'min_rise': 0.5}
+    elif stock_type == '小盘股':
+        result['rsi_thresholds'] = {'over_buy': 75, 'over_sell': 25, 'min_rise': 0.8}
+    elif stock_type == '微盘股':
+        result['rsi_thresholds'] = {'over_buy': 80, 'over_sell': 20, 'min_rise': 1.2}
+
+    # ===================== 2. 基础数据校验与异常处理 =====================
+    try:
+        rsi_data = {
+            6: getattr(strat, 'rsi6', []),
+            12: getattr(strat, 'rsi12', []),
+            24: getattr(strat, 'rsi24', [])
+        }
+        for period in rsi_periods:
+            if len(rsi_data[period]) < 2:
+                print(f"警告：{period}日RSI数据不足（仅{len(rsi_data[period])}个），返回默认值")
+                return result
+
+        # 提取核心数据
+        rsi6 = rsi_data[6][0]
+        rsi6_prev = rsi_data[6][-1]
+        rsi12 = rsi_data[12][0]
+        rsi12_prev = rsi_data[12][-1]
+        rsi24 = rsi_data[24][0]
+
+        # 价格/成交量校验（回测/实盘兼容）
+        has_price = hasattr(strat.data, 'close') and len(strat.data.close) >= max_lookback
+        has_volume = hasattr(strat.data, 'volume') and len(strat.data.volume) >= 2
+
+        # 异常值过滤（RSI值应在0-100之间）
+        if not (0 <= rsi6 <= 100 and 0 <= rsi12 <= 100 and 0 <= rsi24 <= 100):
+            print(f"警告：RSI值异常（6:{rsi6},12:{rsi12},24:{rsi24}），返回默认值")
+            return result
+
+    except Exception as e:
+        print(f"数据校验失败：{str(e)}")
+        return result
+
+    # ===================== 3. 核心计算逻辑（分盘型适配） =====================
+    # 3.1 记录原始RSI数值（保留1位小数）
+    result['rsi_6'] = round(rsi6, 1)
+    result['rsi_12'] = round(rsi12, 1)
+    result['rsi_24'] = round(rsi24, 1)
+
+    # 3.2 计算RSI6单日涨幅（精准到0.1）
+    result['rsi6_rise'] = round(rsi6 - rsi6_prev, 1)
+
+    # 3.3 计算近20天RSI6平均波动率（动态适配标的）
+    lookback_len = min(20, len(rsi_data[6]) - 1)
+    if lookback_len >= 5:  # 至少5个数据点才计算波动率
+        vol_list = [abs(rsi_data[6][-i] - rsi_data[6][-(i + 1)]) for i in range(1, lookback_len + 1)]
+        result['avg_volatility'] = round(np.mean(vol_list), 1)  # numpy计算更高效
+
+    # ===================== 4. 状态判断逻辑（完全分盘型） =====================
+    # 4.1 超买超卖判断（用分盘阈值）
+    over_buy = result['rsi_thresholds']['over_buy']
+    over_sell = result['rsi_thresholds']['over_sell']
+    if rsi6 > over_buy:
+        result['over_buy_sell'] = '超买'
+    elif rsi6 < over_sell:
+        result['over_buy_sell'] = '超卖'
+    else:
+        result['over_buy_sell'] = '正常区间'
+
+    # 4.2 趋势判断（动态波动率 + 分盘最小涨幅）
+    min_rise = result['rsi_thresholds']['min_rise']
+    if abs(result['rsi6_rise']) < max(result['avg_volatility'], min_rise):
+        result['trend_status'] = '震荡'
+    elif result['rsi6_rise'] > 0:
+        result['trend_status'] = '上涨'
+    else:
+        result['trend_status'] = '下跌'
+
+    # 4.3 交叉判断（6日VS12日，核心交叉）
+    if rsi6_prev < rsi12_prev and rsi6 > rsi12:
+        result['cross_status'] = '金叉'
+    elif rsi6_prev > rsi12_prev and rsi6 < rsi12:
+        result['cross_status'] = '死叉'
+    else:
+        result['cross_status'] = '无交叉'
+
+    # 4.4 多周期共振判断（分盘型涨幅要求）
+    rsi12_rise = round(rsi12 - rsi12_prev, 1) if len(rsi_data[12]) >= 2 else 0
+    rsi24_rise = round(rsi24 - rsi_data[24][-1], 1) if len(rsi_data[24]) >= 2 else 0
+
+    # 分盘共振涨幅要求：大盘股宽松，小盘股严格
+    if stock_type == '大盘股':
+        reso_6 = 0.4 * result['avg_volatility']
+        reso_12 = 0.3 * result['avg_volatility']
+        reso_24 = 0.2 * result['avg_volatility']
+    elif stock_type == '中盘股':
+        reso_6 = 0.5 * result['avg_volatility']
+        reso_12 = 0.4 * result['avg_volatility']
+        reso_24 = 0.3 * result['avg_volatility']
+    else:  # 小盘/微盘
+        reso_6 = 0.6 * result['avg_volatility']
+        reso_12 = 0.5 * result['avg_volatility']
+        reso_24 = 0.4 * result['avg_volatility']
+
+    if (np.sign(result['rsi6_rise']) == np.sign(rsi12_rise) == np.sign(rsi24_rise) and
+            abs(result['rsi6_rise']) >= reso_6 and
+            abs(rsi12_rise) >= reso_12 and
+            abs(rsi24_rise) >= reso_24):
+        result['multi_period_resonance'] = True
+
+    # 4.5 有效金叉判断（分盘型权重评分）
+    if result['cross_status'] == '金叉':
+        score = 0
+        # 分盘型权重调整：大盘股侧重长期趋势，小盘股侧重量能
+        if stock_type == '大盘股':
+            # 大盘股：长期趋势权重更高（25分），量能权重更低（15分）
+            if result['over_buy_sell'] != '超买': score += 30  # 位置
+            if abs(result['rsi6_rise']) >= result['avg_volatility'] * 0.7: score += 25  # 涨幅
+            if has_volume and strat.data.volume[0] >= strat.data.volume[-1] * 1.15: score += 15  # 量能
+            if rsi24 > over_sell + 5: score += 25  # 长期趋势
+            if result['multi_period_resonance']: score += 5  # 共振
+            result['is_effective_gold'] = score >= 70  # 大盘股阈值更低
+        elif stock_type in ['小盘股', '微盘股']:
+            # 小盘股：量能权重更高（25分），共振权重更高（15分）
+            if result['over_buy_sell'] != '超买': score += 25  # 位置
+            if abs(result['rsi6_rise']) >= result['avg_volatility'] * 0.9: score += 25  # 涨幅
+            if has_volume and strat.data.volume[0] >= strat.data.volume[-1] * 1.3: score += 25  # 量能
+            if rsi24 > over_sell: score += 10  # 长期趋势
+            if result['multi_period_resonance']: score += 15  # 共振
+            result['is_effective_gold'] = score >= 85  # 小盘股阈值更高
+        else:  # 中盘股（默认）
+            if result['over_buy_sell'] != '超买': score += 30
+            if abs(result['rsi6_rise']) >= result['avg_volatility'] * 0.8: score += 25
+            if has_volume and strat.data.volume[0] >= strat.data.volume[-1] * 1.2: score += 20
+            if rsi24 > 30: score += 15
+            if result['multi_period_resonance']: score += 10
+            result['is_effective_gold'] = score >= 80  # 中盘股默认阈值
+        result['signal_strength'] = round(score / 100, 2)  # 转换为0-1的强度值
+
+    # 4.6 有效死叉判断（对称分盘型）
+    elif result['cross_status'] == '死叉':
+        score = 0
+        if stock_type == '大盘股':
+            if result['over_buy_sell'] != '超卖': score += 30
+            if abs(result['rsi6_rise']) >= result['avg_volatility'] * 0.7: score += 25
+            if has_volume and strat.data.volume[0] >= strat.data.volume[-1] * 1.15: score += 15
+            if rsi24 < over_buy - 5: score += 25
+            if result['multi_period_resonance']: score += 5
+            result['is_effective_dead'] = score >= 70
+        elif stock_type in ['小盘股', '微盘股']:
+            if result['over_buy_sell'] != '超卖': score += 25
+            if abs(result['rsi6_rise']) >= result['avg_volatility'] * 0.9: score += 25
+            if has_volume and strat.data.volume[0] >= strat.data.volume[-1] * 1.3: score += 25
+            if rsi24 < over_buy: score += 10
+            if result['multi_period_resonance']: score += 15
+            result['is_effective_dead'] = score >= 85
+        else:  # 中盘股
+            if result['over_buy_sell'] != '超卖': score += 30
+            if abs(result['rsi6_rise']) >= result['avg_volatility'] * 0.8: score += 25
+            if has_volume and strat.data.volume[0] >= strat.data.volume[-1] * 1.2: score += 20
+            if rsi24 < 70: score += 15
+            if result['multi_period_resonance']: score += 10
+            result['is_effective_dead'] = score >= 80
+        result['signal_strength'] = round(score / 100, 2)
+
+    # 4.7 背离判断（分盘型阈值）
+    try:
+        if has_price:
+            lookback_actual = min(max_lookback, len(strat.data.close), len(rsi_data[6]))
+            close_arr = np.array([strat.data.close[-i] for i in range(lookback_actual)])
+            rsi6_arr = np.array([rsi_data[6][-i] for i in range(lookback_actual)])
+
+            close_max = close_arr.max()
+            rsi6_max = rsi6_arr.max()
+            # 分盘型背离差值要求：大盘股≥0.5点，小盘股≥2点
+            divergence_diff = 0.5 if stock_type == '大盘股' else 2.0
+
+            if (strat.data.close[0] == close_max and
+                    rsi6 < rsi6_max - divergence_diff
+                    and rsi6 > over_buy):
+                result['divergence'] = '顶背离'
+            elif (strat.data.close[0] == close_arr.min() and
+                  rsi6 > rsi6_arr.min() + divergence_diff
+                  and rsi6 < over_sell):
+                result['divergence'] = '底背离'
+            else:
+                result['divergence'] = '无背离'
+        else:
+            result['divergence'] = '无背离'
+    except Exception as e:
+        print(f"背离判断失败：{str(e)}")
+        result['divergence'] = '无背离'
+
+    return result
 
 # ===================== 第二步：工具函数（增强鲁棒性） =====================
 def safe_get_rsi(arr, idx):
@@ -493,12 +762,10 @@ def calculate_rsi_score(strategy):
     matched_signals = []
     for rule_idx, rule in enumerate(RSI_RULES):
         try:
-            if rule['condition_func'](rsi_data):
-                # 匹配成功，记录信号+对应的权重+规则索引（保证排序稳定性）
-                signal_weight = RSI_SIGNAL_WEIGHTS.get(rule['signal_type'], 1.0)
+            if rule['condition_func'](strategy):
                 matched_signals.append({
                     "rule": rule,
-                    "weight": signal_weight,
+                    "weight": rule['weight'],
                     "priority": rule['priority'],
                     "rule_idx": rule_idx  # 规则在列表中的原始位置，用于稳定排序
                 })
